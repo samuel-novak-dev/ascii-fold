@@ -6,6 +6,8 @@
 // sideChainMesh: each side chain hangs from the cartoon. Its Cα is drawn at the residue's point on
 // the cartoon (for an idealised helix up to ~1 Å from the real one), so the sticks grow out of the ribbon.
 // ligandMesh: every ligand as sticks, and every ion as one larger ball in the ligand's colour.
+// sideChainPoints / ligandPoints walk the same atoms and bonds but return points on the sticks'
+// and balls' surfaces (with normals), for the 3D text to print glyphs on.
 
 import { add, sub, mul, norm, cross, dist } from "./vec.js";
 
@@ -48,7 +50,7 @@ function unitSphere(stacks, sides) {
 const SMALL = unitSphere(6, SIDES), LARGE = unitSphere(16, 24);
 
 // A mesh like the cartoon's: positions, normals, owner index (res) and element code (el) per vertex.
-function builder() {
+function meshBuilder() {
   const P = [], N = [], res = [], el = [], T = [];
   const vert = (p, n, r, e) => { P.push(p[0], p[1], p[2]); N.push(n[0], n[1], n[2]); res.push(r); el.push(e); return res.length - 1; };
   return {
@@ -80,9 +82,38 @@ function builder() {
   };
 }
 
-/** show(i): whether residue i shows its side chain. */
-export function sideChainMesh(G, show) {
-  const A = G.atoms, B = builder();
+// Points for glyphs, da apart along a stick and about dr apart around it (or over an ion's ball).
+// A stick atom's own small ball gets none: the sticks' rings already reach it.
+function pointBuilder(da, dr) {
+  const P = [], N = [], res = [], el = [];
+  const put = (p, n, r, e) => { P.push(p[0], p[1], p[2]); N.push(n[0], n[1], n[2]); res.push(r); el.push(e); };
+  return {
+    ball(c, rad, r, e) {
+      if (rad <= STICK) return;
+      const m = Math.max(8, Math.round(4 * Math.PI * rad * rad / (da * dr))), ga = Math.PI * (3 - Math.sqrt(5));
+      for (let i = 0; i < m; i++) {   // a Fibonacci sphere: evenly spread
+        const y = 1 - 2 * (i + 0.5) / m, rr = Math.sqrt(1 - y * y), n = [rr * Math.cos(ga * i), y, rr * Math.sin(ga * i)];
+        put(add(c, mul(n, rad)), n, r, e);
+      }
+    },
+    tube(p, q, r, e) {
+      const L = dist(p, q), d = norm(sub(q, p)), u = norm(cross(d, Math.abs(d[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0])), v = cross(d, u);
+      const rows = Math.max(1, Math.round(L / da)), m = Math.max(4, Math.round(2 * Math.PI * STICK / dr));
+      for (let k = 0; k < rows; k++) {
+        const c = add(p, mul(sub(q, p), (k + 0.5) / rows)), off = (k & 1) * 0.5;
+        for (let j = 0; j < m; j++) {
+          const th = 2 * Math.PI * (j + off) / m, n = add(mul(u, Math.cos(th)), mul(v, Math.sin(th)));
+          put(add(c, mul(n, STICK)), n, r, e);
+        }
+      }
+    },
+    bond(pa, ea, pb, eb, r) { const mid = mul(add(pa, pb), 0.5); this.tube(pa, mid, r, code(ea)); this.tube(mid, pb, r, code(eb)); },
+    done() { return { n: res.length, P: Float32Array.from(P), N: Float32Array.from(N), res: Uint32Array.from(res), el: Uint8Array.from(el) }; },
+  };
+}
+
+function walkSideChains(G, show, B) {
+  const A = G.atoms;
   for (let i0 = 0; i0 < A.n;) {
     const r = A.res[i0];
     let i1 = i0; while (i1 < A.n && A.res[i1] === r) i1++;
@@ -103,10 +134,14 @@ export function sideChainMesh(G, show) {
   }
   return B.done();
 }
+/** show(i): whether residue i shows its side chain. */
+export const sideChainMesh = (G, show) => walkSideChains(G, show, meshBuilder());
+export const sideChainPoints = (G, show, da, dr) => walkSideChains(G, show, pointBuilder(da, dr));
 
 /** Every ligand in G.ligands; res holds the ligand's index. An ion is one ball, all in the ligand's colour. */
-export function ligandMesh(G) {
-  const B = builder();
+export const ligandMesh = G => walkLigands(G, meshBuilder());
+export const ligandPoints = (G, da, dr) => walkLigands(G, pointBuilder(da, dr));
+function walkLigands(G, B) {
   G.ligands.forEach((l, li) => {
     if (l.ion) { B.ball(l.P[0], ionRadius(l.el[0]), li, 0, LARGE); return; }
     const n = l.P.length;

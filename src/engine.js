@@ -7,7 +7,7 @@ import { GIFEncoder, quantize, applyPalette } from "./vendor/gifenc.js";
 import { surfaceMesh, meshAO, meshPoints, RES_BALL } from "./surface.js";
 import { createGLView } from "./glview.js";
 import { cartoonMesh } from "./cartoon.js";
-import { sideChainMesh, ligandMesh, ELEMENT_RGB, elementCss } from "./sticks.js";
+import { sideChainMesh, ligandMesh, sideChainPoints, ligandPoints, ELEMENT_RGB, elementCss } from "./sticks.js";
 
 // ---------------------------------------------------------------------------------------
 // createAsciiFold(container, options) → view
@@ -386,11 +386,12 @@ export function createAsciiFold(container, options = {}) {
     return aoState = { id: geomId, dens, map, C, P: Pf, M, Res };
   }
   function surfaceAO(sf) {   // per glyph: on the surface, the mesh's own ambient occlusion
-    if (sf.kind === "surface") { const ao = meshAO(mesh()); return Float32Array.from(sf.vix, v => AO_MIN + (1 - AO_MIN) * ao[v]); }
-    const { dens, map } = aoInfo(), out = new Float32Array(sf.n), P = sf.P, N = sf.N;   // cartoon: Cα density just outside
-    for (let i = 0, i3 = 0; i < sf.n; i++, i3 += 3)
-      out[i] = dens(P[i3] + N[i3] * AO_OFF, P[i3 + 1] + N[i3 + 1] * AO_OFF, P[i3 + 2] + N[i3 + 2] * AO_OFF);
-    return out.map(map);   // cartoon text: same scale as the ribbon it turns into
+    const { dens, map } = aoInfo(), out = new Float32Array(sf.n), P = sf.P, N = sf.N;
+    let i = 0;
+    if (sf.kind === "surface") { const ao = meshAO(mesh()); for (; i < sf.n0; i++) out[i] = AO_MIN + (1 - AO_MIN) * ao[sf.vix[i]]; }
+    for (let i3 = i * 3; i < sf.n; i++, i3 += 3)   // cartoon, sticks and ligands: Cα density just outside, same scale as the ribbon
+      out[i] = map(dens(P[i3] + N[i3] * AO_OFF, P[i3 + 1] + N[i3 + 1] * AO_OFF, P[i3 + 2] + N[i3 + 2] * AO_OFF));
+    return out;
   }
 
   // ---------- 3D text: glyphs printed on the cartoon's own surfaces ----------
@@ -441,10 +442,13 @@ export function createAsciiFold(container, options = {}) {
     return surfBalls.list;
   }
 
-  // The points glyphs (and surface discs) sit on: the cartoon's bands and tubes, or the surface.
+  // The points glyphs (and surface discs) sit on: the cartoon's bands and tubes, or the surface,
+  // then the side-chain sticks and the ligands when they're shown. own: 0 the chain (res is a
+  // residue), 1 a side chain (res is its residue), 2 a ligand (res is the ligand); el: element code.
   function surface(step) {
-    const kind = o.surface ? "surface" : "cartoon";
-    if (surf && surf.id === geomId && surf.step === step && surf.kind === kind) return surf;
+    const kind = o.surface ? "surface" : "cartoon", sc = o.surface ? null : scShow, lig = !!o.ligands && G.ligands.length > 0;
+    const xkey = (sc ? scKey() : "") + "|" + lig;
+    if (surf && surf.id === geomId && surf.step === step && surf.kind === kind && surf.xkey === xkey) return surf;
     let spacing = step * SURF_SPACING, Pp, Nn, res, vix = null;
     if (o.surface) {   // evenly spaced vertices of the surface mesh
       const m = mesh();
@@ -452,9 +456,18 @@ export function createAsciiFold(container, options = {}) {
       if (ms.n > MAX_GLYPHS) { spacing *= Math.sqrt(ms.n / MAX_GLYPHS); ms = meshPoints(m, spacing); }
       ({ P: Pp, N: Nn, res, vix } = ms);
     } else ({ Pp, Nn, res } = cartoonPoints(step));
-    const n = res.length, hash = new Float32Array(n);
+    const n0 = res.length, da = step * ALONG, dr = step * AROUND, parts = [];
+    if (sc) parts.push([1, sideChainPoints(G, sc === "all" ? () => true : r => sc.has(r), da, dr)]);
+    if (lig) parts.push([2, ligandPoints(G, da, dr)]);
+    const n = parts.reduce((t, [, q]) => t + q.n, n0);
+    const P = new Float32Array(n * 3), N = new Float32Array(n * 3), R = new Uint32Array(n), own = new Uint8Array(n), el = new Uint8Array(n);
+    P.set(Pp); N.set(Nn); R.set(res);
+    let at = n0;
+    for (const [w, q] of parts) { P.set(q.P, at * 3); N.set(q.N, at * 3); R.set(q.res, at); el.set(q.el, at); own.fill(w, at, at + q.n); at += q.n; }
+    const hash = new Float32Array(n);
     for (let i = 0; i < n; i++) { const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453; hash[i] = x - Math.floor(x); }
-    surf = { id: geomId, step, kind, spacing, n, P: Float32Array.from(Pp), N: Float32Array.from(Nn), res: Uint32Array.from(res), vix, hash,
+    const els = [...new Set(el)].filter(Boolean).sort((a, b) => a - b);
+    surf = { id: geomId, step, kind, xkey, spacing, n0, n, P, N, res: R, own, el, els, vix, hash,
              ix: new Uint32Array(n), wn: new Float32Array(n * 3), zs: new Float32Array(n), tx: new Float32Array(n), ty: new Float32Array(n),
              tm: new Float32Array(n * 4), tg: new Uint16Array(n), tr: new Uint16Array(n), tk: new Float32Array(n), ord: new Uint32Array(n) };
     return surf;
@@ -512,9 +525,10 @@ export function createAsciiFold(container, options = {}) {
   let scShow = null, stickState = null;
   const setSideChains = w => { scShow = w === "all" ? "all" : (w && typeof w !== "string") ? new Set(w) : null; };
   setSideChains(o.sidechains);
+  const scKey = () => scShow === "all" ? "all" : [...scShow].sort((a, b) => a - b).join(",");
   function stickMesh() {
     if (!scShow || o.surface) return null;
-    const key = geomId + "|" + (scShow === "all" ? "all" : [...scShow].sort((a, b) => a - b).join(","));
+    const key = geomId + "|" + scKey();
     if (!stickState || stickState.key !== key)
       stickState = { key, m: sideChainMesh(G, scShow === "all" ? () => true : r => scShow.has(r)), colKey: "" };
     return stickState.m.nv ? stickState.m : null;
@@ -607,7 +621,7 @@ export function createAsciiFold(container, options = {}) {
     const { kz, scl, kpx, OX, OY, R, lit } = F, [m0, m1, m2, m3, m4, m5, m6, m7, m8] = F.Rm;
     const sf = surface(textStep());
     if (!sf.ao) sf.ao = surfaceAO(sf);
-    const { n, P: SP, N: SN, res, zs, tx, ty, tg, tr, tk, ord } = sf;   // shares buffers with the 3D text, which runs after
+    const { n0: n, P: SP, N: SN, res, zs, tx, ty, tg, tr, tk, ord } = sf;   // shares buffers with the 3D text, which runs after
     const W = rib.width, H = rib.height, rc = colours().rc, d0 = 2 * SURFEL * sf.spacing * kpx;
     let cnt = 0;
     for (let i = 0; i < n; i++) {
@@ -639,10 +653,31 @@ export function createAsciiFold(container, options = {}) {
     rctx.setTransform(1, 0, 0, 1, 0, 0);
   }
 
+  // The text's colours: the residues' (colours()), then the element colours on the sticks and each
+  // ligand's own colour. pal.of(own, el, res) picks a glyph's. On paper, the palest element colours
+  // (sulfur's yellow, magnesium's green …) are darkened to stay legible as thin glyphs.
+  let tpal = null;
+  const css6 = c => "#" + c.map(v => Math.round(v).toString(16).padStart(2, "0")).join("");
+  function legible(c) {
+    if (o.theme === "night") return c;
+    const L = (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255;
+    return L > 0.55 ? c.map(v => v * 0.55 / L) : c;
+  }
+  function textPalette(sf) {
+    const t = colours(), lc = ligColours(), key = [t.key, o.theme, sf.els.join(), lc.join()].join("|");
+    if (tpal && tpal.key === key) return tpal;
+    const list = t.list.map(c => c.css), idx = new Map(list.map((c, i) => [c, i]));
+    const put = c => { if (!idx.has(c)) { idx.set(c, list.length); list.push(c); } return idx.get(c); };
+    const elIdx = new Int32Array(ELEMENT_RGB.length);
+    for (const e of sf.els) elIdx[e] = put(css6(legible(ELEMENT_RGB[e])));
+    const ligIdx = lc.map((c, i) => put(G.ligands[i].ion && !ligOvr.has(i) ? css6(legible(hex(c))) : c)), rc = t.rc;
+    return tpal = { key, list, of: (w, e, r) => e ? elIdx[e] : w === 2 ? ligIdx[r] : rc[r] };
+  }
+
   // One sprite per glyph × colour × fog step; the blank glyph's slot holds the paper disc.
-  function glyphAtlas() {
-    const t = colours(), css = PAL.css, cols = t.list.map(c => c.css);
-    const key = [t.key, css.bg, ramp, o.font, fontEpoch].join("|");
+  function glyphAtlas(pal) {
+    const css = PAL.css, cols = pal.list;
+    const key = [pal.key, css.bg, ramp, o.font, fontEpoch].join("|");
     if (atlas && atlasKey === key) return atlas;
     atlas = atlas || document.createElement("canvas");
     atlas.width = ramp.length * CELL; atlas.height = cols.length * FOGS * CELL;
@@ -666,11 +701,11 @@ export function createAsciiFold(container, options = {}) {
     const { kz, scl, kpx, OX, OY, dpr, R, lit } = F, [m0, m1, m2, m3, m4, m5, m6, m7, m8] = F.Rm;
     const step = textStep(), sf = surface(step);
     if (!sf.ao) sf.ao = surfaceAO(sf);
-    const { n, P: SP, N: SN, res, hash, ix, wn, zs, tx, ty, tm, tg, tr, tk, ord } = sf;
+    const { n, P: SP, N: SN, res, own, el, hash, ix, wn, zs, tx, ty, tm, tg, tr, tk, ord } = sf, pal = textPalette(sf);
     const cwp = cw * dpr, lhp = lh * dpr, size0 = step * GLYPH_SPRITE * kpx;
     const DW = COLS * DS, DH = ROWS * DS, ux = cwp / DS, uy = lhp / DS, W = COLS * cwp, H = ROWS * lhp;
     const spA = step * Math.max(ALONG, AROUND), rad0 = 0.6 * spA * kpx;   // neighbour spacing (Å), splat radius (px)
-    const night = o.theme === "night", nr = ramp.length - 1, rc = colours().rc;
+    const night = o.theme === "night", nr = ramp.length - 1;
 
     // pass 1: rotate, drop back faces and off-screen glyphs, splat the rest into a depth buffer.
     // The buffer holds the nearest text surface everywhere, so pass 2 can tell a glyph that is
@@ -733,13 +768,13 @@ export function createAsciiFold(container, options = {}) {
       tm[k4] = ax * s; tm[k4 + 1] = ay * s; tm[k4 + 2] = bx * s; tm[k4 + 3] = by * s;
       tg[cnt] = Math.max(1, Math.min(nr, Math.round(v * nr)));
       tk[cnt] = s * KNOCK * f * f;          // the paper disc shrinks away where the ribbon takes over
-      tr[cnt] = rc[res[i]] * FOGS + Math.round(fogOf(dt) * (FOGS - 1));
+      tr[cnt] = pal.of(own[i], el[i], res[i]) * FOGS + Math.round(fogOf(dt) * (FOGS - 1));
       cnt++;
     }
     const order = ord.subarray(0, cnt);
     for (let k = 0; k < cnt; k++) order[k] = k;
     order.sort((p, q) => zs[p] - zs[q]);                                       // back to front
-    const A = glyphAtlas(), knock = o.background;
+    const A = glyphAtlas(pal), knock = o.background;
     tctx.setTransform(1, 0, 0, 1, 0, 0);
     tctx.clearRect(0, 0, txt.width, txt.height);
     for (let q = 0; q < cnt; q++) {
