@@ -81,7 +81,6 @@ function seg(id, fn) {
 seg("surface", v => view.set({ surface: v === "on" }));
 seg("text", v => view.set({ text: v }));
 seg("layout", v => view.set({ layout: v }));
-seg("lighting", v => view.set({ lighting: v }));
 seg("theme", v => { document.body.classList.toggle("night", v === "night"); view.set({ theme: v }); renderLegend(); paintSequence(); });
 seg("detail", v => view.set({ detail: v }));
 seg("glyphs", v => view.set({ glyphs: v }));

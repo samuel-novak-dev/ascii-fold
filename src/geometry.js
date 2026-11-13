@@ -69,6 +69,44 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
     i = j + 1;
   }
 
+  // Idealised helices. A real helix's Cα trace is irregular enough that a ribbon drawn through it
+  // shows kinks and odd angles. Each helix of 4+ residues is redrawn as an ideal one: it follows the
+  // fitted (possibly curved) axis at constant radius and constant twist per residue, with its phase
+  // and twist least-squares fitted to the real Cα, so it stays as close to them as a regular helix
+  // on that axis can. Over the last residue and a half at each end it eases back onto the path
+  // through the real Cα, so loops join exactly as before. Smoother than the data, on purpose;
+  // helixRMSD says by how much.
+  const HF = new Array(N).fill(null), helixRMSD = [];
+  if (!cyl) for (let i = 0; i < N;) {
+    if (SS[i] !== "H") { i++; continue; }
+    let j = i; while (j + 1 < N && SS[j + 1] === "H") j++;
+    if (j - i >= 3) {
+      const U = [], V = [];   // a frame carried along the axis with as little twist as possible
+      let u = sub(CA[i], AX[i]);
+      for (let k = i; k <= j; k++) { u = norm(sub(u, mul(AD[k], dot(u, AD[k])))); U[k] = u; V[k] = cross(AD[k], u); }
+      const th = [], n = j - i + 1;
+      let rs = 0;
+      for (let k = i; k <= j; k++) {   // each Cα's angle and distance around the axis, angles unwrapped
+        const d = sub(CA[k], AX[k]), x = dot(d, U[k]), y = dot(d, V[k]);
+        let a = Math.atan2(y, x);
+        if (th.length) { const p = th[th.length - 1]; a += 2 * Math.PI * Math.round((p - a) / (2 * Math.PI)); }
+        th.push(a); rs += Math.hypot(x, y);
+      }
+      const r = Math.max(1.9, Math.min(2.7, rs / n)), km = (n - 1) / 2, tm = th.reduce((s, a) => s + a, 0) / n;
+      let sxy = 0, sxx = 0;
+      th.forEach((a, k) => { sxy += (k - km) * (a - tm); sxx += (k - km) * (k - km); });
+      const b = sxy / sxx, h = { i, j, U, V, r, a0: tm - b * km, b };   // angle(k) = a0 + b·(k − i)
+      let se = 0;
+      for (let k = i; k <= j; k++) {
+        const ang = h.a0 + b * (k - i), ideal = add(AX[k], add(mul(U[k], r * Math.cos(ang)), mul(V[k], r * Math.sin(ang))));
+        const d = dist(ideal, CA[k]); se += d * d;
+        HF[k] = h;
+      }
+      helixRMSD.push({ from: i, to: j, rmsd: Math.sqrt(se / n) });
+    }
+    i = j + 1;
+  }
+
   // side vectors from carbonyl O (fallback: curvature), sign-consistent, then smoothed
   const SIDE = [];
   for (let i = 0; i < N; i++) {
@@ -91,21 +129,30 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
 
   const rH = cyl ? SH.cylR : 2.1 * SH.hW, rE = Math.max(1.0, SH.sW * 1.35);
   const radOf = ss => ss === "H" ? rH : ss === "E" ? rE : 0.95;
+  const catmull = (p0, p1, p2, p3, t) => {
+    const t2 = t * t, t3 = t2 * t;
+    return [0, 1, 2].map(k => 0.5 * ((2 * p1[k]) + (-p0[k] + p2[k]) * t + (2 * p0[k] - 5 * p1[k] + 4 * p2[k] - p3[k]) * t2 + (-p0[k] + 3 * p1[k] - 3 * p2[k] + p3[k]) * t3));
+  };
   const pts = [];
   for (let i = 0; i < N - 1; i++) {
     const p0 = CA[Math.max(0, i - 1)], p1 = CA[i], p2 = CA[i + 1], p3 = CA[Math.min(N - 1, i + 2)];
     const gap = dist(CA0[i], CA0[i + 1]) > 4.3;
     const inCyl = cyl && SS[i] === "H" && SS[i + 1] === "H";
     for (let s = 0; s < SUB; s++) {
-      const t = s / SUB, t2 = t * t, t3 = t2 * t;
+      const t = s / SUB, hf = HF[i];
       let pos;
       if (inCyl) pos = add(mul(AX[i], 1 - t), mul(AX[i + 1], t));
       else if (cyl && SS[i] === "H") pos = add(mul(AX[i], 1 - t), mul(p2, t));        // leave the cylinder end
       else if (cyl && SS[i + 1] === "H") pos = add(mul(p1, 1 - t), mul(AX[i + 1], t)); // enter the cylinder
-      else {
-        const c = k => 0.5 * ((2 * p1[k]) + (-p0[k] + p2[k]) * t + (2 * p0[k] - 5 * p1[k] + 4 * p2[k] - p3[k]) * t2 + (-p0[k] + 3 * p1[k] - 3 * p2[k] + p3[k]) * t3);
-        pos = [c(0), c(1), c(2)];
-      }
+      else if (hf && HF[i + 1] === hf) {   // the ideal helix (an exact spiral round the smooth axis), eased in at the ends
+        const ax = catmull(AX[Math.max(hf.i, i - 1)], AX[i], AX[i + 1], AX[Math.min(hf.j, i + 2)], t);
+        const T = norm(add(mul(AD[i], 1 - t), mul(AD[i + 1], t)));
+        let u = add(mul(hf.U[i], 1 - t), mul(hf.U[i + 1], t)); u = norm(sub(u, mul(T, dot(u, T)))); const v = cross(T, u);
+        const ang = hf.a0 + hf.b * (i - hf.i + t);
+        const ideal = add(ax, add(mul(u, hf.r * Math.cos(ang)), mul(v, hf.r * Math.sin(ang)))), real = catmull(p0, p1, p2, p3, t);
+        const e = Math.min(i + t - hf.i, hf.j - i - t) / 1.5, w = e >= 1 ? 1 : e * e * (3 - 2 * e);   // smoothstep from each end
+        pos = add(real, mul(sub(ideal, real), w));
+      } else pos = catmull(p0, p1, p2, p3, t);
       const near = t < 0.5 ? i : i + 1;
       pts.push({ p: pos, r: radOf(SS[i]) * (1 - t) + radOf(SS[i + 1]) * t, ss: SS[near], pk: PB[near],
                  side: norm(add(mul(SIDE[i], 1 - t), mul(SIDE[i + 1], t))), res: i, t, gap, cyl: inCyl });
@@ -162,5 +209,5 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
   const plddts = rows.map(r => r.b || 0);
   const hasPlddt = parsed.isAF || false;
   const meanP = plddts.reduce((a, b) => a + b, 0) / N;
-  return { pts, R, hasPlddt, N, meanP, ca: CA0, ssRes: SS, pkRes: PB, atoms, resName: rows.map(r => r.name || "UNK"), resNum: rows.map(r => r.num), ssCounts: { H: SS.filter(s => s === "H").length, E: SS.filter(s => s === "E").length }, ssAuto: !parsed.ss };
+  return { pts, R, hasPlddt, N, meanP, ca: CA0, helixRMSD, ssRes: SS, pkRes: PB, atoms, resName: rows.map(r => r.name || "UNK"), resNum: rows.map(r => r.num), ssCounts: { H: SS.filter(s => s === "H").length, E: SS.filter(s => s === "E").length }, ssAuto: !parsed.ss };
 }

@@ -1,8 +1,6 @@
-// Draws the molecular surface mesh with WebGL, lit the way ChimeraX lights a surface: smooth
-// per-pixel shading from a key light, a fill light and ambient light with a specular highlight
-// ("default"), or mostly ambient light shaded by ambient occlusion with a little key light and no
-// highlight ("gentle"). Depth cueing fades only the back half toward the background, so the front
-// stays crisp. The projection matches the 2D renderer (same rotation, perspective, pan and zoom),
+// Draws the molecular surface mesh with WebGL, lit like ChimeraX's "lighting gentle": smooth
+// per-pixel shading, mostly ambient light darkened by ambient occlusion, a little key light and no
+// highlight. Depth cueing fades only the back half toward the background, so the front stays crisp. The projection matches the 2D renderer (same rotation, perspective, pan and zoom),
 // so the result is drawn straight into the ribbon canvas.
 
 const VS = `
@@ -21,22 +19,14 @@ void main() {
 
 const FS = `
 precision mediump float;
-uniform vec3 u_key, u_fill, u_bg; uniform float u_gentle, u_fog;
+uniform vec3 u_key, u_bg; uniform float u_fog;
 varying vec3 v_n, v_col, v_view; varying float v_ao, v_dt;
 void main() {
   vec3 n = normalize(v_n);
   if (!gl_FrontFacing) n = -n;
   if (dot(n, v_view) < 0.0) n = -n;                       // two-sided, always facing the viewer
-  float key = max(dot(n, u_key), 0.0), fill = max(dot(n, u_fill), 0.0);
-  vec3 h = normalize(u_key + normalize(v_view));
-  vec3 c;
-  if (u_gentle > 0.5) {
-    float amb = 0.25 + 0.95 * v_ao;
-    c = v_col * (0.82 * amb + 0.22 * key);
-  } else {
-    float spec = pow(max(dot(n, h), 0.0), 30.0);
-    c = v_col * (0.38 + 0.68 * key + 0.24 * fill) + vec3(0.28 * spec);
-  }
+  float key = max(dot(n, u_key), 0.0);
+  vec3 c = v_col * (0.82 * (0.25 + 0.95 * v_ao) + 0.22 * key);
   float fog = clamp((0.5 - v_dt) / 0.5, 0.0, 1.0) * u_fog;   // ChimeraX-style: back half only
   gl_FragColor = vec4(mix(c, u_bg, fog), 1.0);
 }`;
@@ -74,7 +64,7 @@ export function createSurfaceGL() {
     gl.bindBuffer(gl.ARRAY_BUFFER, buf.ao); gl.bufferData(gl.ARRAY_BUFFER, ao || new Float32Array(mesh.nv).fill(1), gl.STATIC_DRAW);
   }
 
-  // p: { W, H, rot (3×3 column-major), kz, kpx, R, pan: [x, y], O: [x, y], key, fill (unit vectors, view space), bg [r, g, b] 0–1, gentle, fog }
+  // p: { W, H, rot (3×3 column-major), kz, kpx, R, pan: [x, y], O: [x, y], key (unit vector, view space), bg [r, g, b] 0–1, fog }
   function render(p) {
     if (canvas.width !== p.W || canvas.height !== p.H) { canvas.width = p.W; canvas.height = p.H; }
     gl.viewport(0, 0, p.W, p.H);
@@ -89,8 +79,8 @@ export function createSurfaceGL() {
     gl.uniformMatrix3fv(U("u_rot"), false, p.rot);
     gl.uniform1f(U("u_kz"), p.kz); gl.uniform1f(U("u_kpx"), p.kpx); gl.uniform1f(U("u_R"), p.R);
     gl.uniform2fv(U("u_pan"), p.pan); gl.uniform2fv(U("u_O"), p.O); gl.uniform2f(U("u_size"), p.W, p.H);
-    gl.uniform3fv(U("u_key"), p.key); gl.uniform3fv(U("u_fill"), p.fill); gl.uniform3fv(U("u_bg"), p.bg);
-    gl.uniform1f(U("u_gentle"), p.gentle ? 1 : 0); gl.uniform1f(U("u_fog"), p.fog);
+    gl.uniform3fv(U("u_key"), p.key); gl.uniform3fv(U("u_bg"), p.bg);
+    gl.uniform1f(U("u_fog"), p.fog);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buf.idx);
     gl.drawElements(gl.TRIANGLES, count, idxType, 0);
     return canvas;

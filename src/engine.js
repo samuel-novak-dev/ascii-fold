@@ -50,7 +50,7 @@ export function solidColour(v) {
 export const DETAIL = { xcoarse: 32, coarse: 46, medium: 64 };   // text rows; columns follow width
 export const DEFAULTS = {
   theme: "paper", colour: "ss", layout: "lr", glyphs: "classic", detail: "medium",
-  text: "3d", perspective: 0.5, lighting: "default", surface: false,
+  text: "3d", perspective: 0.5, surface: false,
   spin: 0.35, blendFrom: 0.4, blendTo: 0.6, interactive: true, background: true, palette: null,
   font: '"JetBrains Mono", "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace',
 };
@@ -61,7 +61,7 @@ const MAX_GLYPHS = 60000;    // 3D text: cap on surface glyphs, the spacing grow
 const GLYPH_SPRITE = 1.25;   // 3D text: sprite size in text rows (the glyph em is 0.8 of the sprite, so one row)
 const ALONG = 0.8, AROUND = 0.7;   // 3D text: glyph spacing along the chain and across/around it, in text rows
 const DS = 2;                 // 3D text: depth-buffer cells per text cell, each way
-// Gentle lighting (after ChimeraX's "lighting gentle"): mostly ambient light with ambient occlusion,
+// Lighting, after ChimeraX's "lighting gentle": mostly ambient light with ambient occlusion,
 // a little directional light and no highlights. Occlusion comes from the Cα density within AO_R of a
 // point AO_OFF Å outside the surface, mapped per structure so its 10th–90th percentile spans 1…AO_MIN.
 const AO_R = 9, AO_OFF = 2.2, AO_MIN = 0.15;
@@ -69,11 +69,9 @@ const G_AMB = 0.15, G_DIR = 0.27, G_AO = 0.58;
 const SURF_SPACING = 0.75;   // surface: point spacing, in text rows
 const SURFEL = 1.05;         // surface: disc radius, in point spacings (enough overlap to close the surface)
 const DCELL = 32, SHADES = 24;   // disc atlas: px per disc, shade steps
-const OVAL = [-1, -0.6, -0.25, 0, 0.25, 0.6, 1];   // helix ribbon: gradient stops across the width (−1…1)
 const KNOCK = 0.68;          // 3D text: paper disc behind each glyph, in sprites, hides ink further back
 const CELL = 64, FOGS = 6, FOG_MAX = 0.55;   // glyph atlas: px per sprite, depth-fog steps, fog at the back
 const LIGHT = norm([-0.45, 0.55, 0.75]);   // key light, from the upper left front
-const FILL = norm([0.6, 0.15, 0.8]);       // fill light for the surface, from the right
 // depth cue as in ChimeraX: nothing in the front half, rising to full strength at the back
 // (dt: 0 at the back of the model, 1 at the front)
 const fogOf = dt => Math.max(0, Math.min(1, (0.5 - dt) / 0.5));
@@ -225,11 +223,11 @@ export function createAsciiFold(container, options = {}) {
     lastBox = { x0: left, x1: right, y0: Math.max(0, oy - (panY + R) * S * aspect), y1: Math.min(ROWS, oy - (panY - R) * S * aspect) };
     for (let i = 0; i < COLS; i++) fcol[i] = asciiAmount((i + 0.5 - left) / span);
 
-    // lighting: "default" is a key light (diff = n·L); "gentle" is mostly ambient occlusion
-    const gentle = o.lighting === "gentle", AO = gentle ? aoInfo() : null;
-    const lit = (d, ao) => gentle ? G_AMB + G_DIR * d + G_AO * ao : d;
-    const sh = (col, d, ao, cue, k = 1) => shadeCol(col, lit(d, ao) * k, cue, gentle ? 0.2 : 1);
-    const aoMid = k => AO ? (AO.C[k] + AO.C[k + 1]) / 2 : 1;
+    // lighting, after ChimeraX's "lighting gentle": mostly ambient occlusion, a little key light (diff = n·L)
+    const AO = aoInfo();
+    const lit = (d, ao) => G_AMB + G_DIR * d + G_AO * ao;
+    const sh = (col, d, ao, cue, k = 1) => shadeCol(col, lit(d, ao) * k, cue, 0.2);
+    const aoMid = k => (AO.C[k] + AO.C[k + 1]) / 2;
 
     // flat text: splat spheres along the spline into a z-buffered character grid
     const space = is3D(), P = new Array(pts.length);
@@ -250,7 +248,7 @@ export function createAsciiFold(container, options = {}) {
           if (zf <= zbuf[c]) continue;
           zbuf[c] = zf;
           const diff = Math.max(0, dx * LIGHT[0] - dy * LIGHT[1] + nz * LIGHT[2]);
-          lbuf[c] = gentle ? lit(diff, SL === pts ? AO.C[k] : AO.Res[q.res]) : Math.min(1, 0.18 + 0.82 * diff + Math.pow(nz, 24) * 0.2);
+          lbuf[c] = lit(diff, SL === pts ? AO.C[k] : AO.Res[q.res]);
           cbuf[c] = Math.max(0, Math.min(1, 0.55 + 0.45 * (zf + R) / (2 * R)));
           ibuf[c] = k;
         }
@@ -306,27 +304,16 @@ export function createAsciiFold(container, options = {}) {
         const Ta = a.th, Tb = b.kind === a.kind ? b.th : a.th;
         const sa = SN[k], sb = SN[k + 1], na = NN[k], nb = NN[k + 1];
         const c1 = add(A, mul(sa, wa)), c2 = add(A, mul(sa, -wa)), c3 = add(B, mul(sb, -wb)), c4 = add(B, mul(sb, wb));
-        const nf = norm(add(na, nb)), col = baseOf(a), oval = a.kind === "H";
-        const aoF = !AO ? 1 : nf[2] >= 0 ? (AO.P[k] + AO.P[k + 1]) / 2 : (AO.M[k] + AO.M[k + 1]) / 2;   // the face we see
-        if (oval) {
-          // helix: an oval cross-section, like ChimeraX. The normal rolls toward the rims (up to
-          // ~66°), drawn as a gradient across the band, so the shading curves over smoothly.
-          const fn = nf[2] >= 0 ? nf : mul(nf, -1), sd = norm(add(sa, sb));
-          const L = mul(add(c2, c3), 0.5), Rt = mul(add(c1, c4), 0.5), x0 = X(L), y0 = Y(L), x1 = X(Rt), y1 = Y(Rt);
-          let c = sh(col, Math.abs(dot(nf, LIGHT)), aoF, cue);
-          if (Math.hypot(x1 - x0, y1 - y0) > 1.5) {
-            c = rctx.createLinearGradient(x0, y0, x1, y1);
-            for (const u of OVAL) c.addColorStop((u + 1) / 2, sh(col, Math.abs(dot(norm(add(mul(fn, Math.cos(u * 1.15)), mul(sd, Math.sin(u * 1.15)))), LIGHT)), aoF, cue));
-          }
-          polys.push({ z: zc, q: [c1, c2, c3, c4], c });
-        } else polys.push({ z: zc, q: [c1, c2, c3, c4], c: sh(col, Math.abs(dot(nf, LIGHT)), aoF, cue) });
+        const nf = norm(add(na, nb)), col = baseOf(a);
+        const aoF = nf[2] >= 0 ? (AO.P[k] + AO.P[k + 1]) / 2 : (AO.M[k] + AO.M[k + 1]) / 2;   // the face we see
+        // helices and strands are flat strips: one shade across the whole width of each segment
+        polys.push({ z: zc, q: [c1, c2, c3, c4], c: sh(col, Math.abs(dot(nf, LIGHT)), aoF, cue) });
         if (Math.abs(nf[2]) < 0.9 && Ta > 0.02) {
           for (const sg of [1, -1]) {
             const ea = add(A, mul(sa, sg * wa)), eb = add(B, mul(sb, sg * wb));
             const e = [add(ea, mul(na, Ta)), add(ea, mul(na, -Ta)), add(eb, mul(nb, -Tb)), add(eb, mul(nb, Tb))];
             const s = Math.abs(dot(mul(norm(add(sa, sb)), sg), LIGHT));
-            // a helix rim is the oval's edge: shade it like the edge strip, not as a darker lip
-            polys.push({ z: zc + sg * 0.01 * (sa[2] + sb[2]), q: e, c: oval ? sh(col, s, aoMid(k), cue) : sh(col, s, aoMid(k), cue * 0.95, 0.7) });
+            polys.push({ z: zc + sg * 0.01 * (sa[2] + sb[2]), q: e, c: sh(col, s, aoMid(k), cue * 0.95, 0.7) });
           }
         }
       }
@@ -352,14 +339,14 @@ export function createAsciiFold(container, options = {}) {
         rctx.closePath(); rctx.fill(); rctx.stroke();
       }
     }
-    if (o.surface && o.layout !== "ascii") drawSurface({ cy, sy, cx, sx, kz, scl, kpx, OX, OY, R, gentle, lit });
+    if (o.surface && o.layout !== "ascii") drawSurface({ cy, sy, cx, sx, kz, scl, kpx, OX, OY, R, lit });
     mctx.putImageData(mimg, 0, 0);
     rctx.globalCompositeOperation = "destination-in";
     rctx.imageSmoothingEnabled = false;
     rctx.drawImage(mask, 0, 0, rib.width, rib.height);
     rctx.globalCompositeOperation = "source-over";
 
-    if (space) drawText3D({ cy, sy, cx, sx, S, kz, scl, kpx, OX, OY, dpr, R, gentle, lit });
+    if (space) drawText3D({ cy, sy, cx, sx, S, kz, scl, kpx, OX, OY, dpr, R, lit });
     else if (txtDirty) { tctx.setTransform(1, 0, 0, 1, 0, 0); tctx.clearRect(0, 0, txt.width, txt.height); txtDirty = false; }
   }
 
@@ -391,7 +378,7 @@ export function createAsciiFold(container, options = {}) {
     if (dom) { if (useCol) out.innerHTML = html.join("\n"); else out.textContent = grid.join("\n"); }
   }
 
-  // ---------- ambient occlusion for Gentle lighting ----------
+  // ---------- ambient occlusion ----------
   let aoState = null;
   function aoInfo() {
     if (aoState && aoState.id === geomId) return aoState;
@@ -556,11 +543,11 @@ export function createAsciiFold(container, options = {}) {
       for (let v = 0; v < m.nv; v++) { const c = t.list[t.rc[m.res[v]]].rgb; rgb[v * 3] = c[0]; rgb[v * 3 + 1] = c[1]; rgb[v * 3 + 2] = c[2]; }
       sgl.setColours(rgb); st.colKey = t.key;
     }
-    if (F.gentle && !st.aoOn) { sgl.setAO(meshAO(m)); st.aoOn = true; }
+    if (!st.aoOn) { sgl.setAO(meshAO(m)); st.aoOn = true; }
     const { cy, sy, cx, sx } = F;
     const c = sgl.render({ W: rib.width, H: rib.height, rot: [cy, sx * sy, -cx * sy, 0, cx, sx, sy, -sx * cy, cx * cy],
-      kz: F.kz, kpx: F.kpx, R: F.R, pan: [panX, panY], O: [F.OX, F.OY], key: LIGHT, fill: FILL,
-      bg: PAL.paper.map(v => v / 255), gentle: F.gentle, fog: 0.75 });
+      kz: F.kz, kpx: F.kpx, R: F.R, pan: [panX, panY], O: [F.OX, F.OY], key: LIGHT,
+      bg: PAL.paper.map(v => v / 255), fog: 0.75 });
     rctx.setTransform(1, 0, 0, 1, 0, 0);
     rctx.drawImage(c, 0, 0);
   }
@@ -586,9 +573,9 @@ export function createAsciiFold(container, options = {}) {
   }
 
   function drawSurfels(F) {
-    const { cy, sy, cx, sx, kz, scl, kpx, OX, OY, R, gentle, lit } = F;
+    const { cy, sy, cx, sx, kz, scl, kpx, OX, OY, R, lit } = F;
     const sf = surface(textStep());
-    if (gentle && !sf.ao) sf.ao = surfaceAO(sf);
+    if (!sf.ao) sf.ao = surfaceAO(sf);
     const { n, P: SP, N: SN, res, zs, tx, ty, tg, tr, tk, ord } = sf;   // shares buffers with the 3D text, which runs after
     const W = rib.width, H = rib.height, rc = colours().rc, d0 = 2 * SURFEL * sf.spacing * kpx;
     let cnt = 0;
@@ -602,7 +589,7 @@ export function createAsciiFold(container, options = {}) {
       const sc = scl(vz), X = OX + (vx * sc + panX) * kpx, Y = OY - (vy * sc + panY) * kpx, d = d0 * sc;
       if (X < -d || Y < -d || X > W + d || Y > H + d) continue;
       const diff = Math.max(0, wx * LIGHT[0] + wy * LIGHT[1] + wz * LIGHT[2]);
-      const s = Math.max(0, Math.min(1, gentle ? lit(diff, sf.ao[i]) : 0.12 + 0.88 * diff));
+      const s = Math.max(0, Math.min(1, lit(diff, sf.ao[i])));
       const dt = Math.max(0, Math.min(1, (vz + R) / (2 * R)));
       zs[cnt] = vz; tx[cnt] = X; ty[cnt] = Y; tk[cnt] = d;
       tg[cnt] = Math.round(s * (SHADES - 1));
@@ -612,7 +599,7 @@ export function createAsciiFold(container, options = {}) {
     const order = ord.subarray(0, cnt);
     for (let k = 0; k < cnt; k++) order[k] = k;
     order.sort((p, q) => zs[p] - zs[q]);
-    const A = discAtlas(gentle ? 0.2 : 1);
+    const A = discAtlas(0.2);
     for (let q = 0; q < cnt; q++) {
       const k = order[q], d = tk[k];
       rctx.setTransform(d, 0, 0, d, tx[k], ty[k]);
@@ -645,9 +632,9 @@ export function createAsciiFold(container, options = {}) {
   }
 
   function drawText3D(F) {
-    const { cy, sy, cx, sx, kz, scl, kpx, OX, OY, dpr, R, gentle, lit } = F;
+    const { cy, sy, cx, sx, kz, scl, kpx, OX, OY, dpr, R, lit } = F;
     const step = textStep(), sf = surface(step);
-    if (gentle && !sf.ao) sf.ao = surfaceAO(sf);
+    if (!sf.ao) sf.ao = surfaceAO(sf);
     const { n, P: SP, N: SN, res, hash, ix, wn, zs, tx, ty, tm, tg, tr, tk, ord } = sf;
     const cwp = cw * dpr, lhp = lh * dpr, size0 = step * GLYPH_SPRITE * kpx;
     const DW = COLS * DS, DH = ROWS * DS, ux = cwp / DS, uy = lhp / DS, W = COLS * cwp, H = ROWS * lhp;
@@ -696,7 +683,7 @@ export function createAsciiFold(container, options = {}) {
       if (dbuf[Math.floor(Y / uy) * DW + Math.floor(X / ux)] > vz + 0.15 + slope * 0.6 * spA) continue;
       // light → glyph (as in the flat text), depth → fog step
       const diff = Math.max(0, wx * LIGHT[0] + wy * LIGHT[1] + wz * LIGHT[2]);
-      const light = gentle ? lit(diff, sf.ao[i]) : Math.min(1, 0.18 + 0.82 * diff + Math.pow(Math.max(0, wz), 24) * 0.2);
+      const light = lit(diff, sf.ao[i]);
       const dt = Math.max(0, Math.min(1, (vz + R) / (2 * R))), cue = 0.55 + 0.45 * dt;
       let v = night ? (0.3 + 0.7 * light) * cue : (0.5 + 0.55 * (1 - light)) * (0.7 + 0.3 * cue) * 1.1;   // fog does most of the depth
       v = Math.min(1, v) * (0.45 + 0.55 * f);
@@ -898,7 +885,10 @@ export function createAsciiFold(container, options = {}) {
     get rotation() { return { y: rotY, x: rotX }; },
     resetView() { resetView(); kick(); return api; },
     /** Current frame as plain text (the flat character grid, also in 3D mode). */
-    text() { if (G && HASH && is3D()) { render(false, true); buildChars(false); } return lastGrid.join("\n"); },
+    text() {
+      if (G && HASH) { if (is3D()) { render(false, true); buildChars(false); } else if (!lastGrid.length) render(false); }
+      return lastGrid.join("\n");
+    },
     /** Current frame (ribbon + text) as a PNG data URL. crop: trim to the protein. */
     snapshot({ scale = 2, pad = 40, crop = true } = {}) {
       const box = cropBox(crop), c = document.createElement("canvas");

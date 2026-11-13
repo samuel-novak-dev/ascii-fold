@@ -8,7 +8,6 @@ import { createAsciiFold } from "./engine.js";
 //   theme         paper | night                      colour      ss | plddt | a ChimeraX colour name or hex
 //   layout        lr | rl | ascii | ribbon
 //   text          3d | flat                          perspective 0–1 (default 0.5; 0 = orthographic)
-//   lighting      default | gentle (soft ambient occlusion, as in ChimeraX)
 //   surface       show the molecular surface instead of the cartoon (attribute present = on)
 //   glyphs        classic | blocks | geo | <custom ramp, light → dark>
 //   detail        xcoarse | coarse | medium | <rows>
@@ -26,7 +25,6 @@ const OPTION_ATTRS = {
   theme: v => ({ theme: v }), colour: v => ({ colour: v }), color: v => ({ colour: v }), layout: v => ({ layout: v }),
   glyphs: v => ({ glyphs: v }),
   text: v => ({ text: v === "flat" ? "flat" : "3d" }),
-  lighting: v => ({ lighting: v === "gentle" ? "gentle" : "default" }),
   surface: v => ({ surface: v !== null && v !== "false" }),
   perspective: v => ({ perspective: Math.max(0, Math.min(1, parseFloat(v) || 0)) }),
   detail: v => ({ detail: /^\d+$/.test(v) ? +v : v }),
