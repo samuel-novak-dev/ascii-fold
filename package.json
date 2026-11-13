@@ -30,10 +30,13 @@
     "bioinformatics"
   ],
   "author": "Maxim Tsenkov",
+  "contributors": [
+    "samuel-novak-dev (https://github.com/samuel-novak-dev)"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mitsenkov/ascii-fold.git"
+    "url": "https://github.com/samuel-novak-dev/ascii-fold.git"
   },
   "devDependencies": {
     "esbuild": "^0.24.0"

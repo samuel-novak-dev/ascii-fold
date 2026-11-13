@@ -40,10 +40,14 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
   const rows = parsed.rows;
   if (rows.length < 5) throw new Error("Too few residues to draw");
   const N = rows.length, SH = { ...SHAPE_DEFAULT, ...shape };
+  // several chains are drawn one after another, with a break between them: brk[i] marks the last
+  // residue of a chain, first[i] the first. Nothing (helix, strand, spline) runs across a break.
+  const chainOf = rows.map(r => r.chain ?? "");
+  const brk = chainOf.map((c, i) => i === N - 1 || chainOf[i + 1] !== c), first = chainOf.map((c, i) => i === 0 || chainOf[i - 1] !== c);
   let CA0 = rows.map(r => r.CA);
   const cen = CA0.reduce((a, p) => add(a, p), [0, 0, 0]).map(v => v / N);
   CA0 = CA0.map(p => sub(p, cen));
-  const SS = parsed.ss || assignSS(CA0);
+  const SS = parsed.ss || assignSS(CA0, chainOf);
   const PB = rows.map(r => pbin(r.b || 0));
   // spline samples per residue: a helix turns ~100° per residue, so fewer than ~6 shows as corners
   const SUB = Math.max(6, Math.min(12, Math.round(4000 / N)));
@@ -52,7 +56,7 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
   let CA = CA0.map(p => p.slice());
   for (let pass = 0; pass < 3 && SH.flat > 0; pass++) {
     const nx = CA.map((p, i) => {
-      if (SS[i] !== "E" || i === 0 || i === N - 1) return p;
+      if (SS[i] !== "E" || first[i] || brk[i]) return p;
       const avg = mul(add(add(CA[i - 1], mul(p, 2)), CA[i + 1]), 0.25);
       return add(mul(p, 1 - SH.flat), mul(avg, SH.flat));
     });
@@ -63,7 +67,7 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
   const AX = new Array(N).fill(null), AD = new Array(N).fill(null);
   for (let i = 0; i < N;) {
     if (SS[i] !== "H") { i++; continue; }
-    let j = i; while (j + 1 < N && SS[j + 1] === "H") j++;
+    let j = i; while (!brk[j] && SS[j + 1] === "H") j++;
     helixAxis(CA, i, j).forEach((p, k) => AX[i + k] = p);
     for (let k = i; k <= j; k++) AD[k] = norm(sub(AX[Math.min(j, k + 1)], AX[Math.max(i, k - 1)]));
     i = j + 1;
@@ -79,7 +83,7 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
   const HF = new Array(N).fill(null), helixRMSD = [];
   for (let i = 0; i < N;) {
     if (SS[i] !== "H") { i++; continue; }
-    let j = i; while (j + 1 < N && SS[j + 1] === "H") j++;
+    let j = i; while (!brk[j] && SS[j + 1] === "H") j++;
     if (j - i >= 3) {
       const U = [], V = [];   // a frame carried along the axis with as little twist as possible
       let u = sub(CA[i], AX[i]);
@@ -112,13 +116,13 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
   for (let i = 0; i < N; i++) {
     let sv;
     if (rows[i].O) sv = norm(sub(rows[i].O, rows[i].CA));
-    else { const a = CA[Math.max(0, i - 1)], b = CA[Math.min(N - 1, i + 1)]; sv = norm(sub(add(a, b), mul(CA[i], 2))); }
-    if (i > 0 && dot(sv, SIDE[i - 1]) < 0) sv = mul(sv, -1);
+    else { const a = CA[first[i] ? i : i - 1], b = CA[brk[i] ? i : i + 1]; sv = norm(sub(add(a, b), mul(CA[i], 2))); }
+    if (!first[i] && dot(sv, SIDE[i - 1]) < 0) sv = mul(sv, -1);
     SIDE.push(sv);
   }
   const extraE = Math.round(SH.flat * 6);
   for (let pass = 0; pass < 2 + extraE; pass++) {
-    const sm = SIDE.map((v, i) => (i === 0 || i === N - 1 || SS[i] === "C" || (pass >= 2 && SS[i] !== "E")) ? v
+    const sm = SIDE.map((v, i) => (first[i] || brk[i] || SS[i] === "C" || (pass >= 2 && SS[i] !== "E")) ? v
       : norm(add(add(mul(SIDE[i - 1], 0.25), mul(v, 0.5)), mul(SIDE[i + 1], 0.25))));
     for (let i = 0; i < N; i++) SIDE[i] = sm[i];
   }
@@ -135,8 +139,8 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
   };
   const pts = [];
   for (let i = 0; i < N - 1; i++) {
-    const p0 = CA[Math.max(0, i - 1)], p1 = CA[i], p2 = CA[i + 1], p3 = CA[Math.min(N - 1, i + 2)];
-    const gap = dist(CA0[i], CA0[i + 1]) > 4.3;
+    const p0 = CA[first[i] ? i : i - 1], p1 = CA[i], p2 = CA[i + 1], p3 = CA[brk[i + 1] ? i + 1 : i + 2];
+    const gap = brk[i] || dist(CA0[i], CA0[i + 1]) > 4.3;   // a chain break, or residues missing from the model
     for (let s = 0; s < SUB; s++) {
       const t = s / SUB, hf = HF[i];
       let pos;
@@ -158,20 +162,21 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
 
   for (let k = 0; k < pts.length; k++) {
     const q = pts[k];
-    const a = pts[Math.max(0, k - 1)].p, b = pts[Math.min(pts.length - 1, k + 1)].p;
-    const T = norm(sub(b, a));
+    // tangent from the neighbours, one-sided at a break so a chain's end doesn't lean toward the next chain
+    const a = k > 0 && !pts[k - 1].gap ? pts[k - 1].p : q.p, b = k < pts.length - 1 && !q.gap ? pts[k + 1].p : q.p;
+    const T = norm(a === b ? sub(pts[Math.min(pts.length - 1, k + 1)].p, pts[Math.max(0, k - 1)].p) : sub(b, a));
     const S = norm(sub(q.side, mul(T, dot(q.side, T))));
     q.side = S; q.nrm = norm(cross(T, S));
-    const i = q.res, t = q.t, own = SS[i], next = SS[Math.min(N - 1, i + 1)], prev = SS[Math.max(0, i - 1)];
+    const i = q.res, t = q.t, own = SS[i], next = brk[i] ? own : SS[i + 1], prev = first[i] ? own : SS[i - 1];
     // a helix ribbon's normal points out from the axis, toward the side chains, so the renderer
     // can tell the outside of a turn (facing the viewer) from the inside (seen through the gaps)
     if (own === "H" && AX[i]) {
-      const ax = AX[i + 1] && SS[i + 1] === "H" ? add(mul(AX[i], 1 - t), mul(AX[i + 1], t)) : AX[i];
+      const ax = !brk[i] && AX[i + 1] && SS[i + 1] === "H" ? add(mul(AX[i], 1 - t), mul(AX[i + 1], t)) : AX[i];
       if (dot(q.nrm, sub(q.p, ax)) < 0) q.nrm = mul(q.nrm, -1);
     }
     let w = 0, th = 0;
     if (own === "H") {   // full width inside the helix, tapering over its first and last residue
-      w = SH.hW * (next === "H" ? 1 : 1 - 0.7 * t) * (prev === "H" || i === 0 ? 1 : 0.3 + 0.7 * t);
+      w = SH.hW * (next === "H" ? 1 : 1 - 0.7 * t) * (prev === "H" || first[i] ? 1 : 0.3 + 0.7 * t);
       th = SH.hT;
     }
     else if (own === "E") {
@@ -217,5 +222,5 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
   // colour by B-factor ("pLDDT") whenever the file has varying B-factors; hasPlddt only labels them
   const hasPlddt = !!parsed.hasPlddt, hasB = !!parsed.bFactors || hasPlddt;
   const meanP = plddts.reduce((a, b) => a + b, 0) / N;
-  return { pts, R, hasPlddt, hasB, fromAFDB: !!parsed.fromAFDB, N, meanP, ca: CA0, helixRMSD, ssRes: SS, pkRes: PB, atoms, anchor, ligands, resName: rows.map(r => r.name || "UNK"), resNum: rows.map(r => r.num), ssCounts: { H: SS.filter(s => s === "H").length, E: SS.filter(s => s === "E").length }, ssAuto: !parsed.ss };
+  return { pts, R, hasPlddt, hasB, fromAFDB: !!parsed.fromAFDB, N, meanP, ca: CA0, helixRMSD, ssRes: SS, pkRes: PB, atoms, anchor, ligands, resName: rows.map(r => r.name || "UNK"), resNum: rows.map(r => r.num), resChain: chainOf, chains: [...new Set(chainOf)], ssCounts: { H: SS.filter(s => s === "H").length, E: SS.filter(s => s === "E").length }, ssAuto: !parsed.ss };
 }

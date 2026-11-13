@@ -7,7 +7,7 @@ import { GIFEncoder, quantize, applyPalette } from "./vendor/gifenc.js";
 import { surfaceMesh, meshAO, meshPoints, RES_BALL } from "./surface.js";
 import { createGLView } from "./glview.js";
 import { cartoonMesh } from "./cartoon.js";
-import { sideChainMesh, ligandMesh, sideChainPoints, ligandPoints, ELEMENT_RGB, elementCss } from "./sticks.js";
+import { sideChainMesh, ligandMesh, sideChainPoints, ligandPoints, ELEMENT_RGB, elementCss, ionRadius } from "./sticks.js";
 
 // ---------------------------------------------------------------------------------------
 // createAsciiFold(container, options) → view
@@ -37,6 +37,9 @@ export const COLOURS = [
 const MORE_COLOURS = [["deep sky blue", "#00bfff"], ["light sky blue", "#87cefa"], ["steel blue", "#4682b4"], ["cadet blue", "#5f9ea0"],
   ["dark cyan", "#008b8b"], ["tomato", "#ff6347"], ["coral", "#ff7f50"], ["medium violet red", "#c71585"],
   ["pale violet red", "#db7093"], ["indian red", "#cd5c5c"], ["crimson", "#dc143c"]];
+// colour by chain: one colour per chain, in file order (repeating after ten)
+export const CHAIN_COLOURS = ["#6495ed", "#ff7f50", "#20b2aa", "#db7093", "#ffa500", "#5f9ea0", "#c71585", "#a9a9a9", "#4682b4", "#cd5c5c"];
+const MODES = new Set(["ss", "plddt", "chain"]);   // colours that depend on the residue
 const COLOUR_HEX = Object.fromEntries([...COLOURS, ...MORE_COLOURS].map(([n, h]) => [n.replace(/\s+/g, ""), h]));
 const ONE = { ALA: "A", ARG: "R", ASN: "N", ASP: "D", CYS: "C", GLN: "Q", GLU: "E", GLY: "G", HIS: "H", ILE: "I", LEU: "L", LYS: "K",
   MET: "M", PHE: "F", PRO: "P", SER: "S", THR: "T", TRP: "W", TYR: "Y", VAL: "V", MSE: "M", SEC: "U", PYL: "O" };
@@ -51,12 +54,14 @@ export function solidColour(v) {
 export const DETAIL = { xcoarse: 32, coarse: 46, medium: 64 };   // text rows; columns follow width
 export const DEFAULTS = {
   theme: "paper", colour: "ss", layout: "lr", glyphs: "classic", detail: "medium",
-  perspective: 1, surface: false, depth: 0.6, faces: false, sidechains: "none", ligands: true,
-  spin: 0, blendFrom: 0.4, blendTo: 0.6, interactive: true, background: true, palette: null,
+  perspective: 1, surface: false, glass: false, glassOpacity: 0.3, depth: 0.6, faces: false, sidechains: "none", ligands: true,
+  spin: 0, motion: "turn", blendFrom: 0.4, blendTo: 0.6, interactive: true, background: true, palette: null,
   font: '"JetBrains Mono", "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace',
 };
 
 const MAX_CELLS = 70000, ZMIN = 0.4, ZMAX = 10;
+const SPIN = 1.6;            // turn speed in rad/s at spin 1
+const ROCK = 0.5;            // rock: swing ±0.5 rad (≈29°) about the screen's vertical axis
 const LIGAND_CARBON = "#a9a9a9";   // a ligand's carbons, until recoloured ("dark gray"); an ion keeps its element's colour
 const PERSP = 0.45;          // perspective 1 puts the camera R / 0.45 from the centre
 const MAX_GLYPHS = 60000;    // 3D text: cap on surface glyphs, the spacing grows to fit
@@ -146,7 +151,7 @@ export function createAsciiFold(container, options = {}) {
   function applyStyle() {
     const p = { ...PALETTES[o.theme] || PALETTES.paper, ...(o.palette || {}) };
     PAL = { paper: hex(p.bg), ink: hex(p.ink), H: hex(p.H), E: hex(p.E), C: hex(p.C), P: p.P.map(hex), css: p };
-    const sc = o.colour === "ss" || o.colour === "plddt" ? null : solidColour(o.colour);
+    const sc = MODES.has(o.colour) ? null : solidColour(o.colour);
     SOLID = sc ? { css: sc, rgb: hex(sc) } : null;
     probe.style.fontFamily = o.font;
     root.style.background = o.background ? p.bg : "transparent";
@@ -154,6 +159,7 @@ export function createAsciiFold(container, options = {}) {
     root.style.cursor = o.interactive ? "grab" : "default";
   }
 
+  let renderScale = 1, vectorText = false, noKnock = false;   // set only while exporting
   function fit() {
     const W = root.clientWidth, H = root.clientHeight;
     if (!W || !H) return;
@@ -165,7 +171,7 @@ export function createAsciiFold(container, options = {}) {
     cw = probe.getBoundingClientRect().width / 10 || fs * ratio; lh = fs; aspect = cw / lh;
     const cols = Math.max(16, Math.floor(W / cw));
     if (cols !== COLS || rows !== ROWS || !HASH) { COLS = cols; ROWS = rows; alloc(); }
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = (window.devicePixelRatio || 1) * renderScale;   // renderScale > 1 only while taking a large snapshot
     // the text and model canvases set the box size
     inner.style.width = rib.style.width = txt.style.width = COLS * cw + "px";
     inner.style.height = rib.style.height = txt.style.height = ROWS * lh + "px";
@@ -184,24 +190,26 @@ export function createAsciiFold(container, options = {}) {
   // Every residue gets one colour: the overall mode (SS, pLDDT or one colour) unless the sequence
   // panel recoloured it. colours() turns that into a short list of distinct colours plus each
   // residue's index into it, which the text, ribbon and surface all draw from.
-  const colourMode = () => o.colour === "plddt" ? (G && G.hasB ? "plddt" : "ss") : SOLID ? "solid" : "ss";   // "plddt": the B-factor column
+  const colourMode = () => o.colour === "plddt" ? (G && G.hasB ? "plddt" : "ss") : o.colour === "chain" ? "chain" : SOLID ? "solid" : "ss";   // "plddt": the B-factor column
+  // a chain's colour follows its place among all the file's chains, so hiding one doesn't recolour the rest
+  const chainColour = id => { const k = lastParsed && lastParsed.chains ? lastParsed.chains.findIndex(c => c.id === id) : 0; return CHAIN_COLOURS[Math.max(0, k) % CHAIN_COLOURS.length]; };
   function colours() {
     const mode = colourMode(), css = PAL.css;
     const key = [mode, css.H, css.E, css.C, css.P.join(), SOLID && SOLID.css, ovrVer, geomId].join("|");
     if (ctab && ctab.key === key) return ctab;
     const list = [], idx = new Map(), rc = new Uint8Array(G.N);
     const add = c => { if (!idx.has(c)) { idx.set(c, list.length); list.push({ css: c, rgb: hex(c) }); } return idx.get(c); };
-    const byMode = (m, i) => m === "plddt" && G.hasB ? css.P[G.pkRes[i]] : m === "solid" ? SOLID.css : css[G.ssRes[i]];
+    const byMode = (m, i) => m === "plddt" && G.hasB ? css.P[G.pkRes[i]] : m === "solid" ? SOLID.css : m === "chain" ? chainColour(G.resChain[i]) : css[G.ssRes[i]];
     for (let i = 0; i < G.N; i++) {
       const v = ovr.get(i);
-      rc[i] = add(v === undefined ? byMode(mode, i) : v === "ss" || v === "plddt" ? byMode(v, i) : v);
+      rc[i] = add(v === undefined ? byMode(mode, i) : MODES.has(v) ? byMode(v, i) : v);
     }
     return ctab = { key, list, rc };
   }
   const baseOf = q => { const t = colours(); return t.list[t.rc[q.res]].rgb; };
 
   // ---------- view helpers ----------
-  const fitR = () => G.R + (o.surface ? 4 : 0);   // the surface reaches past the chain
+  const fitR = () => G.R + (o.surface || o.glass ? 4 : 0);   // the surface reaches past the chain
   const baseScale = () => G ? Math.min((COLS * 0.5 - 2) / fitR(), (ROWS * 0.5 - 1) / (fitR() * aspect)) : 1;
   function zoomAt(factor, cx = COLS / 2, cy = ROWS / 2) {
     const z2 = Math.max(ZMIN, Math.min(ZMAX, zoom * factor));
@@ -328,6 +336,7 @@ export function createAsciiFold(container, options = {}) {
 
     if (space) drawText3D({ Rm, S, kz, scl, kpx, OX, OY, dpr, R, lit });
     else if (txtDirty) { tctx.setTransform(1, 0, 0, 1, 0, 0); tctx.clearRect(0, 0, txt.width, txt.height); txtDirty = false; }
+    if (labels.size) { drawLabels({ Rm, scl, kpx, OX, OY, dpr }); txtDirty = true; }
   }
 
   // ---------- Copy text: the whole protein as plain characters ----------
@@ -550,13 +559,18 @@ export function createAsciiFold(container, options = {}) {
     const v = view3d();
     if (!v) { if (o.surface) drawSurfels(F); return; }   // no WebGL: the 2D ribbon was drawn already
     const name = o.surface ? "surface" : "cartoon", m = o.surface ? mesh() : cartMesh(), st = o.surface ? meshState : cartState, t = colours();
-    if (v.mesh(name) !== m) { v.setMesh(name, m); st.colKey = ""; st.aoOn = false; }
-    if (st.colKey !== t.key) {           // per-vertex colour from its residue
-      const rgb = new Uint8Array(m.nv * 3);
-      for (let i = 0; i < m.nv; i++) { const c = t.list[t.rc[m.res[i]]].rgb; rgb[i * 3] = c[0]; rgb[i * 3 + 1] = c[1]; rgb[i * 3 + 2] = c[2]; }
-      v.setColours(name, rgb); st.colKey = t.key;
-    }
-    if (!st.aoOn) { if (o.surface) v.setAO(name, meshAO(m)); st.aoOn = true; }   // the cartoon is shaded by depth instead
+    const upload = (slot, mm, ms, ao) => {   // mesh, per-vertex colour from its residue, and (surface only) ambient occlusion
+      if (v.mesh(slot) !== mm) { v.setMesh(slot, mm); ms.colKey = ""; ms.aoOn = false; }
+      if (ms.colKey !== t.key) {
+        const rgb = new Uint8Array(mm.nv * 3);
+        for (let i = 0; i < mm.nv; i++) { const c = t.list[t.rc[mm.res[i]]].rgb; rgb[i * 3] = c[0]; rgb[i * 3 + 1] = c[1]; rgb[i * 3 + 2] = c[2]; }
+        v.setColours(slot, rgb); ms.colKey = t.key;
+      }
+      if (!ms.aoOn) { if (ao) v.setAO(slot, meshAO(mm)); ms.aoOn = true; }   // the cartoon is shaded by depth instead
+    };
+    upload(name, m, st, o.surface);
+    const glass = !o.surface && o.glass;   // the see-through surface over the cartoon
+    if (glass) upload("surface", mesh(), meshState, true);
     const names = [name], sm = o.surface ? null : stickMesh();
     if (sm) {   // side chains: carbons in the residue's colour, N / O / S by element
       if (v.mesh("sticks") !== sm) { v.setMesh("sticks", sm); stickState.colKey = ""; }
@@ -592,7 +606,8 @@ export function createAsciiFold(container, options = {}) {
     const c = v.render({ W: rib.width, H: rib.height, rot: [M[0], M[3], M[6], M[1], M[4], M[7], M[2], M[5], M[8]],   // column-major
       kz: F.kz, kpx: F.kpx, R: F.R, pan: [panX, panY], O: [F.OX, F.OY], key: LIGHT,
       bg: PAL.paper.map(x => x / 255), ink: [0.08, 0.08, 0.08], edge: Math.max(1, 1.25 * F.dpr), mode: o.surface ? 0 : 1,
-      depth: 0.9 * clamp01(o.depth), fog: Math.min(1, 1.25 * clamp01(o.depth)), faces: !!o.faces, drange: [dn, df] }, names);   // depth: the Depth slider
+      depth: 0.9 * clamp01(o.depth), fog: Math.min(1, 1.25 * clamp01(o.depth)), faces: !!o.faces, drange: [dn, df],   // depth: the Depth slider
+      glass: glass ? "surface" : null, glassAlpha: clamp01(o.glassOpacity) }, names);
     rctx.setTransform(1, 0, 0, 1, 0, 0);
     rctx.drawImage(c, 0, 0);
   }
@@ -774,27 +789,132 @@ export function createAsciiFold(container, options = {}) {
     const order = ord.subarray(0, cnt);
     for (let k = 0; k < cnt; k++) order[k] = k;
     order.sort((p, q) => zs[p] - zs[q]);                                       // back to front
-    const A = glyphAtlas(pal), knock = o.background;
+    const knock = o.background && !noKnock;
     tctx.setTransform(1, 0, 0, 1, 0, 0);
     tctx.clearRect(0, 0, txt.width, txt.height);
-    for (let q = 0; q < cnt; q++) {
-      const k = order[q], X = tx[k], Y = ty[k], k4 = k * 4, d = tk[k];
-      if (knock && d > 0.5) { tctx.setTransform(d, 0, 0, d, X, Y); tctx.drawImage(A, 0, 0, CELL, CELL, -0.5, -0.5, 1, 1); }
-      tctx.setTransform(tm[k4], tm[k4 + 1], tm[k4 + 2], tm[k4 + 3], X, Y);
-      tctx.drawImage(A, tg[k] * CELL, tr[k] * CELL, CELL, CELL, -0.5, -0.5, 1, 1);
+    if (vectorText) {   // a large snapshot: real text instead of atlas sprites, sharp at any size
+      const rows = pal.list.flatMap(c => { const b = hex(c); return Array.from({ length: FOGS }, (_, fl) => { const f = fl / (FOGS - 1) * FOG_MAX; return rgb(b.map((v, i) => v * (1 - f) + PAL.paper[i] * f)); }); });
+      tctx.font = `700 100px ${o.font}`; tctx.textAlign = "center"; tctx.textBaseline = "middle";
+      for (let q = 0; q < cnt; q++) {
+        const k = order[q], X = tx[k], Y = ty[k], k4 = k * 4, d = tk[k];
+        if (knock && d > 0.5) { tctx.setTransform(d, 0, 0, d, X, Y); tctx.fillStyle = PAL.css.bg; tctx.beginPath(); tctx.arc(0, 0, 0.5 - 1 / CELL, 0, 2 * Math.PI); tctx.fill(); }
+        tctx.setTransform(tm[k4] / 125, tm[k4 + 1] / 125, tm[k4 + 2] / 125, tm[k4 + 3] / 125, X, Y);   // atlas glyphs are 0.8 of a sprite: 100 px / 125
+        tctx.fillStyle = rows[tr[k]]; tctx.fillText(ramp[tg[k]], 0, 0);
+      }
+    } else {
+      const A = glyphAtlas(pal);
+      for (let q = 0; q < cnt; q++) {
+        const k = order[q], X = tx[k], Y = ty[k], k4 = k * 4, d = tk[k];
+        if (knock && d > 0.5) { tctx.setTransform(d, 0, 0, d, X, Y); tctx.drawImage(A, 0, 0, CELL, CELL, -0.5, -0.5, 1, 1); }
+        tctx.setTransform(tm[k4], tm[k4 + 1], tm[k4 + 2], tm[k4 + 3], X, Y);
+        tctx.drawImage(A, tg[k] * CELL, tr[k] * CELL, CELL, CELL, -0.5, -0.5, 1, 1);
+      }
     }
     tctx.setTransform(1, 0, 0, 1, 0, 0);
     txtDirty = true;
   }
 
+  // ---------- labels: pinned to residues and ligands, kept by chain + number so they survive chain changes ----------
+  const labels = new Map();   // key ("r" + chain:num, or "l" + chain:num:name) → true, in the order they were added
+  let labelIdx = null;
+  function labelTargets() {   // key → { kind, i } in the current geometry
+    if (labelIdx && labelIdx.id === geomId) return labelIdx.map;
+    const map = new Map();
+    G.resName.forEach((_, i) => map.set("r" + resKey(G, i), { kind: "residue", i }));
+    G.ligands.forEach((l, i) => map.set("l" + ligKey(l), { kind: "ligand", i }));
+    labelIdx = { id: geomId, map };
+    return map;
+  }
+  const labelKey = (kind, i) => kind === "ligand" ? "l" + ligKey(G.ligands[i]) : "r" + resKey(G, i);
+  function labelText(kind, i) {
+    const multi = G.chains.length > 1;
+    if (kind === "ligand") { const l = G.ligands[i]; return l.name + (multi ? ` (${l.chain})` : ""); }
+    return (ONE[G.resName[i]] || "X") + G.resNum[i] + (multi ? ` (${G.resChain[i]})` : "");
+  }
+  // where a label's leader line starts: a shown side chain's tip, a surface residue's outermost atom,
+  // a ligand's centre, or the residue's point on the cartoon
+  function labelAnchor(kind, i) {
+    if (kind === "ligand") { const P = G.ligands[i].P; return mul(P.reduce((a, p) => add(a, p), [0, 0, 0]), 1 / P.length); }
+    const A = G.atoms, side = !o.surface && scShow && (scShow === "all" || scShow.has(i));
+    if (o.surface || side) {
+      let best = null, bd = -1;
+      const ca = G.anchor[i] || G.ca[i];
+      for (let a = 0; a < A.n; a++) {
+        if (A.res[a] !== i) continue;
+        const p = [A.P[a * 3], A.P[a * 3 + 1], A.P[a * 3 + 2]], d = o.surface ? Math.hypot(...p) : dist(p, ca);
+        if (d > bd) { bd = d; best = p; }
+      }
+      if (best) return best;
+    }
+    return G.anchor[i] || G.ca[i];
+  }
+  function drawLabels(F) {
+    const { scl, kpx, OX, OY, dpr } = F, M = F.Rm, targets = labelTargets(), ink = PAL.css.ink, bg = PAL.css.bg;
+    const proj = p => { const vx = M[0] * p[0] + M[1] * p[1] + M[2] * p[2], vy = M[3] * p[0] + M[4] * p[1] + M[5] * p[2], vz = M[6] * p[0] + M[7] * p[1] + M[8] * p[2], sc = scl(vz);
+      return [OX + (vx * sc + panX) * kpx, OY - (vy * sc + panY) * kpx]; };
+    const [cx, cy] = proj([0, 0, 0]), lead = 26 * dpr, fs = 12.5 * dpr;
+    tctx.setTransform(1, 0, 0, 1, 0, 0);
+    tctx.font = `700 ${fs}px ${o.font}`; tctx.textBaseline = "middle"; tctx.lineJoin = "round";
+    for (const key of labels.keys()) {
+      const t = targets.get(key); if (!t) continue;   // its chain is hidden
+      const [ax, ay] = proj(labelAnchor(t.kind, t.i));
+      let dx = ax - cx, dy = ay - cy; const dl = Math.hypot(dx, dy) || 1; dx /= dl; dy /= dl;
+      if (dl < 1) { dx = 0.7; dy = -0.7; }
+      const lx = ax + dx * lead, ly = ay + dy * lead, right = dx >= 0, text = labelText(t.kind, t.i);
+      tctx.strokeStyle = bg; tctx.lineWidth = 3.2 * dpr; tctx.beginPath(); tctx.moveTo(ax, ay); tctx.lineTo(lx, ly); tctx.stroke();
+      tctx.strokeStyle = ink; tctx.lineWidth = 1.1 * dpr; tctx.beginPath(); tctx.moveTo(ax, ay); tctx.lineTo(lx, ly); tctx.stroke();
+      tctx.fillStyle = ink; tctx.beginPath(); tctx.arc(ax, ay, 2.2 * dpr, 0, 2 * Math.PI); tctx.fill();
+      tctx.textAlign = right ? "left" : "right";
+      const tx0 = lx + (right ? 4 : -4) * dpr;
+      tctx.strokeStyle = bg; tctx.lineWidth = 4 * dpr; tctx.strokeText(text, tx0, ly);
+      tctx.fillText(text, tx0, ly);
+    }
+  }
+
+  // What's under a point on screen: the front-most residue (its cartoon, side chain or surface atoms)
+  // or ligand. Returns { kind: "residue" | "ligand", i } or null.
+  function pickAt(clientX, clientY) {
+    if (!G || !inner) return null;
+    const rect = inner.getBoundingClientRect(), x = clientX - rect.left, y = clientY - rect.top;
+    const R = fitR(), S = baseScale() * zoom, kz = clamp01(o.perspective) * PERSP / R, M = Rm;
+    const kpx = S * aspect * lh, OX = COLS / 2 * cw, OY = ROWS / 2 * lh;
+    let best = null, near = null;
+    const test = (px, py, pz, rad, kind, i) => {
+      const vx = M[0] * px + M[1] * py + M[2] * pz, vy = M[3] * px + M[4] * py + M[5] * pz, vz = M[6] * px + M[7] * py + M[8] * pz;
+      const sc = 1 / Math.max(0.3, 1 - kz * vz), d = Math.hypot(OX + (vx * sc + panX) * kpx - x, OY - (vy * sc + panY) * kpx - y);
+      if (d <= Math.max(3, rad * sc * kpx)) { if (!best || vz > best.z) best = { kind, i, z: vz }; }
+      else if (d < 10 && (!near || d < near.d)) near = { kind, i, d };
+    };
+    const A = G.atoms;
+    if (o.surface) for (let a = 0; a < A.n; a++) test(A.P[a * 3], A.P[a * 3 + 1], A.P[a * 3 + 2], A.R[a], "residue", A.res[a]);
+    else {
+      for (const q of G.pts) if (!q.gap) test(q.p[0], q.p[1], q.p[2], Math.max(1.1, q.wOut || 0, shape.coilR), "residue", q.res);
+      if (scShow) for (let a = 0; a < A.n; a++) {
+        const r = A.res[a];
+        if ((scShow === "all" || scShow.has(r)) && !["N", "C", "O", "CA"].includes(A.name[a])) test(A.P[a * 3], A.P[a * 3 + 1], A.P[a * 3 + 2], 0.6, "residue", r);
+      }
+    }
+    if (o.ligands) G.ligands.forEach((l, li) => l.P.forEach(p => test(p[0], p[1], p[2], l.ion ? ionRadius(l.el[0]) : 0.7, "ligand", li)));
+    const hit = best || near;
+    return hit ? { kind: hit.kind, i: hit.i } : null;
+  }
+
   // ---------- animation (paused while off-screen) ----------
-  let raf = 0, prev = performance.now(), visible = true, dragging = false, destroyed = false, capturing = false;
+  let raf = 0, prev = performance.now(), visible = true, dragging = false, destroyed = false, capturing = false, rockPh = 0;
+  // one seamless loop: a full turn, or one swing out and back. angleAt(f): the angle at f (0–1) of it
+  const loopSeconds = () => (o.motion === "rock" ? 2 * Math.PI * ROCK : 2 * Math.PI) / (SPIN * Math.max(0.1, o.spin || 0));
+  const angleAt = f => o.motion === "rock" ? ROCK * Math.sin(2 * Math.PI * f) : 2 * Math.PI * f;
   function loop(t) {
     raf = 0;
     if (destroyed) return;
     const dt = Math.min(0.05, (t - prev) / 1000); prev = t;
     if (capturing) { raf = 0; return; }
-    if (!dragging && o.spin) Rm = turn(o.spin * dt * 1.6, 0, Rm);
+    if (!dragging && o.spin) {
+      if (o.motion === "rock") {   // swing ±ROCK, as fast at the middle as a turn at this speed
+        const a0 = Math.sin(rockPh); rockPh = (rockPh + o.spin * SPIN / ROCK * dt) % (2 * Math.PI);
+        Rm = turn(ROCK * (Math.sin(rockPh) - a0), 0, Rm);
+      } else Rm = turn(o.spin * dt * SPIN, 0, Rm);
+    }
     render();
     if (visible) raf = requestAnimationFrame(loop);
   }
@@ -852,7 +972,16 @@ export function createAsciiFold(container, options = {}) {
     const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
     zoomAt(Math.exp(-dy * 0.001), ...cellAt(e.clientX, e.clientY));
   }, { passive: false });
-  root.addEventListener("dblclick", () => { if (o.interactive) resetView(); });
+  // a click that isn't a drag reports what's under it ("pick"), unless it turns out to be a double-click
+  let downAt = null, pickTimer = 0;
+  root.addEventListener("pointerdown", e => { downAt = e.button === 0 && !e.shiftKey && !e.altKey ? [e.clientX, e.clientY] : null; }, true);
+  root.addEventListener("click", e => {
+    if (!o.interactive || !downAt || e.detail > 1 || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return;
+    const x = e.clientX, y = e.clientY;
+    clearTimeout(pickTimer);
+    pickTimer = setTimeout(() => { const hit = pickAt(x, y); emit("pick", hit); }, 260);
+  });
+  root.addEventListener("dblclick", () => { clearTimeout(pickTimer); if (o.interactive) resetView(); });
 
   // ---------- export helpers ----------
   function cropBox(crop) {
@@ -863,23 +992,56 @@ export function createAsciiFold(container, options = {}) {
     }
     return { i0: x0, i1: x1, j0: y0, j1: y1, w: (x1 - x0) * cw, h: (y1 - y0) * lh };
   }
-  function composeFrame(ctx, box, scale, pad) {
+  function composeFrame(ctx, box, scale, pad, transparent = false) {
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
-    ctx.fillStyle = PAL.css.bg; ctx.fillRect(0, 0, box.w + pad * 2, box.h + pad * 2);
+    if (transparent) ctx.clearRect(0, 0, box.w + pad * 2, box.h + pad * 2);
+    else { ctx.fillStyle = PAL.css.bg; ctx.fillRect(0, 0, box.w + pad * 2, box.h + pad * 2); }
     const dpr = rib.width / (COLS * cw);
     ctx.drawImage(rib, box.i0 * cw * dpr, box.j0 * lh * dpr, box.w * dpr, box.h * dpr, pad, pad, box.w, box.h);
     ctx.drawImage(txt, box.i0 * cw * dpr, box.j0 * lh * dpr, box.w * dpr, box.h * dpr, pad, pad, box.w, box.h);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
 
+  // ---------- chains: which of the file's protein chains are drawn ----------
+  let chainSel = null;   // null: all of them
+  const MANY = 6000;     // residues: above this only the first chain is drawn at first
+  function shownParsed(p) {
+    if (!chainSel || !p.chains || p.chains.every(c => chainSel.has(c.id))) return p;
+    const keep = p.rows.map(r => chainSel.has(r.chain));
+    return { ...p, rows: p.rows.filter((_, i) => keep[i]), ss: p.ss && p.ss.filter((_, i) => keep[i]),
+             ligands: (p.ligands || []).filter(l => !l.near || l.near.some(c => chainSel.has(c))) };
+  }
+  // Rebuild after the shown chains change: per-residue and per-ligand colours and side-chain picks
+  // follow their residues (chain + number), not their old positions.
+  const resKey = (g, i) => g.resChain[i] + ":" + g.resNum[i];
+  const ligKey = l => l.chain + ":" + l.num + ":" + l.name;
+  // Colours of residues and ligands in hidden chains wait in `stash` until their chain is back.
+  const stash = new Map();
+  function rebuild() {
+    const old = G;
+    G = buildGeometry(shownParsed(lastParsed), shape); geomId++;
+    if (!old) return;
+    for (const [i, c] of ovr) stash.set("r" + resKey(old, i), c);
+    for (const [i, c] of ligOvr) stash.set("l" + ligKey(old.ligands[i]), c);
+    ovr.clear(); ligOvr.clear(); ovrVer++; ligVer++;
+    G.resName.forEach((_, i) => { const k = "r" + resKey(G, i); if (stash.has(k)) { ovr.set(i, stash.get(k)); stash.delete(k); } });
+    G.ligands.forEach((l, i) => { const k = "l" + ligKey(l); if (stash.has(k)) { ligOvr.set(i, stash.get(k)); stash.delete(k); } });
+    const at = new Map(G.resName.map((_, i) => [resKey(G, i), i]));
+    if (scShow && scShow !== "all") scShow = new Set([...scShow].map(i => at.get(resKey(old, i))).filter(j => j !== undefined));
+  }
+
+  const chainLabel = p => { const c = (p.chains || []).map(c => c.id); return c.length > 1 ? `chains ${c.join(", ")}` : `chain ${p.chain}`; };
+
   // ---------- public API ----------
   let loadToken = 0, aborter = null;
   function setStructure(parsed, meta = {}) {
-    G = buildGeometry(parsed, shape); geomId++;
-    ovr.clear(); ovrVer++; ligOvr.clear(); ligVer++;
     lastParsed = parsed;
+    const total = parsed.rows.length, chains = parsed.chains || [];
+    chainSel = chains.length > 1 && total > MANY ? new Set([chains[0].id]) : null;
+    G = null; rebuild();
+    ovr.clear(); ovrVer++; ligOvr.clear(); ligVer++; stash.clear(); labels.clear();
     info = { title: meta.title || parsed.title || "Structure", sub: meta.sub || "", residues: G.N, meanPlddt: G.hasPlddt ? G.meanP : null, meanB: G.hasB ? G.meanP : null,
-             hasPlddt: G.hasPlddt, hasB: G.hasB, ligands: G.ligands.length, fromAFDB: G.fromAFDB || !!meta.entryUrl, ssFromGeometry: G.ssAuto, chain: parsed.chain, entryUrl: meta.entryUrl || null, acc: meta.acc || null };
+             hasPlddt: G.hasPlddt, hasB: G.hasB, ligands: G.ligands.length, fromAFDB: G.fromAFDB || !!meta.entryUrl, ssFromGeometry: G.ssAuto, chain: parsed.chain, chains: chains.map(c => c.id), entryUrl: meta.entryUrl || null, acc: meta.acc || null };
     root.setAttribute("aria-label", `${info.title}: rotating protein structure drawn as text and ribbon`);
     resetView(true);
     emit("load", info);
@@ -906,7 +1068,7 @@ export function createAsciiFold(container, options = {}) {
     /** Update ribbon shape parameters (see SHAPE_DEFAULT); rebuilds geometry. */
     setShape(partial = {}) {
       shape = { ...shape, ...partial };
-      if (lastParsed) { G = buildGeometry(lastParsed, shape); geomId++; }
+      if (lastParsed) { G = buildGeometry(shownParsed(lastParsed), shape); geomId++; }
       kick();
       return api;
     },
@@ -919,7 +1081,7 @@ export function createAsciiFold(container, options = {}) {
       if (token !== loadToken) return null;
       return setStructure(parsed, {
         title: afId ? afId.acc : file.name.replace(/\.(pdb|cif|mmcif|ent)(\.gz)?$/i, ""),
-        sub: [afId ? `AF-${afId.acc}-F${afId.frag}` : (parsed.title || "local file"), `chain ${parsed.chain}`].join(" · "),
+        sub: [afId ? `AF-${afId.acc}-F${afId.frag}` : (parsed.title || "local file"), chainLabel(parsed)].join(" · "),
       });
     },
     /** Fetch a model from AlphaFold DB by UniProt accession. Rejects with AFDBError. */
@@ -943,16 +1105,32 @@ export function createAsciiFold(container, options = {}) {
       if (G && HASH) { render(true); buildChars(); }
       return lastGrid.join("\n");
     },
-    /** Current frame (ribbon + text) as a PNG data URL. crop: trim to the protein. */
-    snapshot({ scale = 2, pad = 40, crop = true } = {}) {
-      const box = cropBox(crop), c = document.createElement("canvas");
-      c.width = Math.round((box.w + pad * 2) * scale); c.height = Math.round((box.h + pad * 2) * scale);
-      composeFrame(c.getContext("2d"), box, scale, pad);
-      return c.toDataURL("image/png");
-    },
     /**
-     * Record one full turn as an animated GIF. Each frame is rendered at an exact angle,
-     * so the loop is seamless. Resolves to a Blob (image/gif).
+     * Current frame (model + text) as a PNG data URL, rendered afresh at `scale` output pixels per
+     * screen pixel (up to what the GPU allows), with the text drawn as real glyphs so it stays sharp.
+     * crop: trim to the protein · transparent: no background (and no paper discs under the glyphs).
+     */
+    snapshot({ scale = 2, pad = 40, crop = true, transparent = false } = {}) {
+      const dpr = window.devicePixelRatio || 1, v = view3d();
+      let rs = Math.max(1, scale / dpr);
+      const W = root.clientWidth * dpr, H = root.clientHeight * dpr, lim = v ? v.maxSize : 8192;
+      rs = Math.min(rs, lim / W, lim / H, Math.sqrt(64e6 / (W * H)));   // the GPU's limit, and ~64 Mpx
+      renderScale = Math.max(1, rs); vectorText = true; noKnock = transparent;
+      try {
+        fit(); render();
+        const box = cropBox(crop), c = document.createElement("canvas");
+        c.width = Math.round((box.w + pad * 2) * scale); c.height = Math.round((box.h + pad * 2) * scale);
+        composeFrame(c.getContext("2d"), box, scale, pad, transparent);
+        return c.toDataURL("image/png");
+      } finally {
+        renderScale = 1; vectorText = false; noKnock = false; fit(); render();
+      }
+    },
+    /** Seconds in one loop of the motion (a turn, or a rock out and back) at the current spin speed. */
+    loopSeconds,
+    /**
+     * Record one loop of the motion (a full turn, or one rock) as an animated GIF. Each frame is
+     * rendered at an exact angle, so the loop is seamless. Resolves to a Blob (image/gif).
      *   frames: frames per turn · delay: ms per frame · width: output px · onProgress(0..1) · signal: AbortSignal
      */
     async recordGif({ frames = 60, delay = 50, width = 720, pad = 24, crop = true, onProgress, signal } = {}) {
@@ -966,7 +1144,7 @@ export function createAsciiFold(container, options = {}) {
         const W = Math.round(width), H = Math.round((box.h + pad * 2) * scale);
         const c = document.createElement("canvas"); c.width = W; c.height = H;
         const ctx = c.getContext("2d", { willReadFrequently: true });
-        const frameAt = i => { Rm = turn((2 * Math.PI * i) / frames, 0, R0); render(); composeFrame(ctx, box, scale, pad); return ctx.getImageData(0, 0, W, H).data; };
+        const frameAt = i => { Rm = turn(angleAt(i / frames), 0, R0); render(); composeFrame(ctx, box, scale, pad); return ctx.getImageData(0, 0, W, H).data; };
         // one shared palette from a few spread-out frames keeps colours from flickering
         const picks = [0, 0.25, 0.5, 0.75].map(f => Math.floor(f * frames));
         const sample = new Uint8ClampedArray(W * H * 4 * picks.length);
@@ -985,14 +1163,61 @@ export function createAsciiFold(container, options = {}) {
         Rm = R0; capturing = false; render(); kick();
       }
     },
+    /**
+     * Record one loop of the motion as a video (WebM, or MP4 where that's all the browser records).
+     * Frames are rendered at exact angles and paced in real time, so it takes as long as the loop.
+     * Resolves to a Blob; its type says which format.
+     */
+    async recordVideo({ fps = 30, width = 1080, pad = 24, crop = true, onProgress, signal } = {}) {
+      if (!G) throw new Error("Nothing loaded");
+      if (capturing) throw new Error("Already recording");
+      const types = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4;codecs=avc1", "video/mp4"];
+      const type = typeof MediaRecorder === "function" && types.find(t => MediaRecorder.isTypeSupported(t));
+      if (!type) throw new Error("this browser can't record video; try the GIF");
+      capturing = true;
+      const R0 = Rm.slice();
+      try {
+        render();
+        const box = cropBox(crop), scale = width / (box.w + pad * 2);
+        const W = Math.round(width / 2) * 2, H = Math.round((box.h + pad * 2) * scale / 2) * 2;   // even sizes, for the encoders
+        const c = document.createElement("canvas"); c.width = W; c.height = H;
+        const ctx = c.getContext("2d"), stream = c.captureStream(0), track = stream.getVideoTracks()[0];
+        const rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: Math.round(W * H * fps * 0.25) });
+        const chunks = [], done = new Promise(r => { rec.onstop = r; });
+        rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+        const frames = Math.max(12, Math.round(loopSeconds() * fps)), t0 = performance.now();
+        rec.start();
+        for (let i = 0; i < frames; i++) {   // the next frame would be the first again: the loop is seamless
+          if (signal && signal.aborted) { rec.stop(); await done; throw new DOMException("Recording cancelled", "AbortError"); }
+          Rm = turn(angleAt(i / frames), 0, R0); render(); composeFrame(ctx, box, scale, pad);
+          if (track.requestFrame) track.requestFrame();
+          if (onProgress) onProgress(i / frames);
+          const wait = t0 + (i + 1) * 1000 / fps - performance.now();
+          await new Promise(r => setTimeout(r, Math.max(0, wait)));
+        }
+        rec.stop(); await done;
+        return new Blob(chunks, { type: type.split(";")[0] });
+      } finally {
+        Rm = R0; capturing = false; render(); kick();
+      }
+    },
     palette() { return { ...PAL.css }; },
     /** Residues for a sequence view: [{ i, num, name, aa, ss }]. */
-    residues() { return G ? G.resName.map((name, i) => ({ i, num: G.resNum[i], name, aa: ONE[name] || "X", ss: G.ssRes[i] })) : []; },
+    residues() { return G ? G.resName.map((name, i) => ({ i, num: G.resNum[i], chain: G.resChain[i], name, aa: ONE[name] || "X", ss: G.ssRes[i] })) : []; },
+    /** The file's protein chains: [{ id, n (residues), shown, colour (its colour when colouring by chain) }]. */
+    chains() { return lastParsed ? (lastParsed.chains || []).map(c => ({ id: c.id, n: c.n, shown: !chainSel || chainSel.has(c.id), colour: chainColour(c.id) })) : []; },
+    /** Draw only these chains (ids; null or empty: all). Colours and side chains stay with their residues. */
+    showChains(ids) {
+      if (!lastParsed) return api;
+      const all = (lastParsed.chains || []).map(c => c.id), want = ids && ids.length ? all.filter(c => ids.includes(c)) : all;
+      chainSel = want.length && want.length < all.length ? new Set(want) : null;
+      rebuild(); kick(); emit("chains", api.chains()); return api;
+    },
     /** Each residue's current colour (css), after any per-residue colours. */
     residueColours() { if (!G) return []; const t = colours(); return Array.from(t.rc, c => t.list[c].css); },
     /** Colour residues (indices) by "ss", "plddt", a colour name or hex; null returns them to the overall colour. */
     colourResidues(indices, colour) {
-      const c = colour == null ? null : colour === "ss" || colour === "plddt" ? colour : solidColour(colour);
+      const c = colour == null ? null : MODES.has(colour) ? colour : solidColour(colour);
       if (colour != null && !c) throw new Error(`Unknown colour: ${colour}`);
       for (const i of indices) if (c === null) ovr.delete(i); else ovr.set(i, c);
       ovrVer++; kick(); emit("colour"); return api;
@@ -1003,15 +1228,82 @@ export function createAsciiFold(container, options = {}) {
     ligands() { return G ? G.ligands.map((l, i) => ({ i, name: l.name, num: l.num, chain: l.chain, ion: l.ion, atoms: l.P.length })) : []; },
     /** Each ligand's current colour (css): its carbons', or an ion's. */
     ligandColours() { return ligColours(); },
-    /** Colour ligands (indices) with a colour name or hex; null (or "ss" / "plddt") returns them to their own colour. */
+    /** Colour ligands (indices) with a colour name or hex; null (or "ss" / "plddt" / "chain") returns them to their own colour. */
     colourLigands(indices, colour) {
-      const c = colour == null || colour === "ss" || colour === "plddt" ? null : solidColour(colour);
-      if (colour != null && colour !== "ss" && colour !== "plddt" && !c) throw new Error(`Unknown colour: ${colour}`);
+      const c = colour == null || MODES.has(colour) ? null : solidColour(colour);
+      if (colour != null && !MODES.has(colour) && !c) throw new Error(`Unknown colour: ${colour}`);
       for (const i of indices) if (c === null) ligOvr.delete(i); else ligOvr.set(i, c);
       ligVer++; kick(); emit("colour"); return api;
     },
+    /** Labels pinned in the view: [{ kind: "residue" | "ligand", i, text }] (those in hidden chains left out). */
+    labels() {
+      if (!G) return [];
+      const t = labelTargets();
+      return [...labels.keys()].map(k => t.get(k)).filter(Boolean).map(({ kind, i }) => ({ kind, i, text: labelText(kind, i) }));
+    },
+    /** Pin a label on a residue or ligand (kind "residue" | "ligand", index), or take it off (on: false). Omit on to toggle. */
+    label(kind, i, on) {
+      if (!G) return api;
+      const k = labelKey(kind, i), has = labels.has(k);
+      if (on === undefined ? has : !on) labels.delete(k); else if (!has) labels.set(k, true);
+      kick(); emit("labels", api.labels()); return api;
+    },
+    /** What's at a point on screen (client px): { kind, i } or null. Clicks report it as the "pick" event. */
+    pick(x, y) { return pickAt(x, y); },
+    clearLabels() { labels.clear(); kick(); emit("labels", []); return api; },
+    /**
+     * The whole view as plain data (JSON-safe): display options, shape, orientation, zoom and pan,
+     * shown chains, per-residue and per-ligand colours, side chains and labels. Residues and ligands
+     * are named by chain and number, so a view can be applied to the same structure loaded again.
+     */
+    getView() {
+      if (!G) return null;
+      const keep = ["theme", "colour", "layout", "glyphs", "detail", "perspective", "surface", "glass", "glassOpacity", "depth",
+        "faces", "ligands", "spin", "motion"];
+      return {
+        format: "ascii-fold-view", version: 1,
+        structure: { title: info && info.title, residues: lastParsed.rows.length, chains: (lastParsed.chains || []).map(c => c.id) },
+        options: Object.fromEntries(keep.map(k => [k, o[k]])), shape: { ...shape },
+        rotation: Rm.slice(), zoom, pan: [panX, panY],
+        chains: chainSel ? [...chainSel] : null,
+        residueColours: [...[...ovr].map(([i, c]) => [resKey(G, i), c]), ...[...stash].filter(([k]) => k[0] === "r").map(([k, c]) => [k.slice(1), c])],
+        ligandColours: [...[...ligOvr].map(([i, c]) => [ligKey(G.ligands[i]), c]), ...[...stash].filter(([k]) => k[0] === "l").map(([k, c]) => [k.slice(1), c])],
+        sideChains: scShow === "all" ? "all" : scShow ? [...scShow].map(i => resKey(G, i)) : null,
+        labels: [...labels.keys()],
+      };
+    },
+    /**
+     * Apply a view from getView(). Residues, ligands and labels the loaded structure doesn't have are
+     * skipped; returns how many of each were matched and missed.
+     */
+    setView(v) {
+      if (!v || v.format !== "ascii-fold-view") throw new Error("not an ascii-fold view file");
+      if (!G) throw new Error("load a structure first");
+      if (v.options) api.set(v.options);
+      if (v.shape) api.setShape(v.shape);
+      if (lastParsed.chains && lastParsed.chains.length > 1) api.showChains(v.chains || null);
+      const at = new Map(G.resName.map((_, i) => [resKey(G, i), i])), lat = new Map(G.ligands.map((l, i) => [ligKey(l), i]));
+      const known = new Set(lastParsed.rows.map(r => r.chain + ":" + r.num)), lknown = new Set((lastParsed.ligands || []).map(ligKey));
+      const tally = { residues: 0, ligands: 0, missed: 0 };
+      ovr.clear(); ligOvr.clear(); stash.clear();
+      for (const [k, c] of v.residueColours || []) {
+        if (at.has(k)) { ovr.set(at.get(k), c); tally.residues++; } else if (known.has(k)) stash.set("r" + k, c); else tally.missed++;
+      }
+      for (const [k, c] of v.ligandColours || []) {
+        if (lat.has(k)) { ligOvr.set(lat.get(k), c); tally.ligands++; } else if (lknown.has(k)) stash.set("l" + k, c); else tally.missed++;
+      }
+      ovrVer++; ligVer++;
+      setSideChains(v.sideChains === "all" ? "all" : Array.isArray(v.sideChains) ? v.sideChains.map(k => at.get(k)).filter(i => i !== undefined) : null);
+      labels.clear();
+      for (const k of v.labels || []) if (known.has(k.slice(1)) || lknown.has(k.slice(1))) labels.set(k, true); else tally.missed++;
+      if (Array.isArray(v.rotation) && v.rotation.length === 9 && v.rotation.every(Number.isFinite)) Rm = v.rotation.slice();
+      if (Number.isFinite(v.zoom)) zoom = Math.max(ZMIN, Math.min(ZMAX, v.zoom));
+      if (Array.isArray(v.pan)) [panX, panY] = v.pan.map(x => +x || 0);
+      kick(); emit("zoom", zoom); emit("colour"); emit("labels", api.labels());
+      return tally;
+    },
     /** Drop all per-residue and per-ligand colours. */
-    clearResidueColours() { ovr.clear(); ovrVer++; ligOvr.clear(); ligVer++; kick(); emit("colour"); return api; },
+    clearResidueColours() { ovr.clear(); ovrVer++; ligOvr.clear(); ligVer++; stash.clear(); kick(); emit("colour"); return api; },
     on(ev, fn) { (listeners[ev] = listeners[ev] || []).push(fn); return () => { listeners[ev] = listeners[ev].filter(f => f !== fn); }; },
     destroy() {
       destroyed = true;

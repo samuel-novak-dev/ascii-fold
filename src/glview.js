@@ -6,7 +6,9 @@
 // are lightened and its inside (seen through the gaps) darkened. With WebGL2 it renders
 // into an antialiased offscreen buffer, then outlines every depth jump, like ChimeraX's silhouettes.
 // The projection matches the 2D renderer (same rotation, perspective, pan and zoom), so the result
-// is drawn straight into the model canvas.
+// is drawn straight into the model canvas. A see-through surface ("glass") can go over the cartoon:
+// only its front-most layer, lit like the surface, more opaque where it turns away (a rim), with
+// a light outline, and hidden wherever the cartoon or a ligand comes out in front of it.
 
 const VS = `
 attribute vec3 a_pos; attribute vec3 a_nrm; attribute vec3 a_col; attribute float a_ao; attribute float a_band; attribute float a_face;
@@ -26,7 +28,7 @@ void main() {
 
 const FS = `
 precision mediump float;
-uniform vec3 u_key, u_bg; uniform float u_fog, u_mode, u_depth, u_faces; uniform vec2 u_drange;
+uniform vec3 u_key, u_bg; uniform float u_fog, u_mode, u_depth, u_faces, u_alpha; uniform vec2 u_drange;
 varying vec3 v_n, v_col, v_view; varying float v_ao, v_dt, v_dist, v_band, v_face;
 void main() {
   vec3 n = normalize(v_n);
@@ -43,7 +45,13 @@ void main() {
   }
   vec3 c = v_col * (0.82 * (0.25 + 0.95 * v_ao) + 0.22 * key);
   float fog = clamp((0.5 - v_dt) / 0.5, 0.0, 1.0) * u_fog;   // ChimeraX-style: back half only
-  gl_FragColor = vec4(mix(c, u_bg, fog), 1.0);
+  c = mix(c, u_bg, fog);
+  if (u_alpha < 1.0) {   // glass: premultiplied, more opaque at grazing angles
+    float a = u_alpha + (1.0 - u_alpha) * 0.55 * pow(1.0 - abs(dot(n, normalize(v_view))), 3.0);
+    gl_FragColor = vec4(c * a, a);
+    return;
+  }
+  gl_FragColor = vec4(c, 1.0);
 }`;
 
 // silhouettes: a pixel turns ink where a neighbour about u_w px away is nearer by more than u_thr
@@ -65,6 +73,23 @@ void main() {
   o = c.a < 0.5 ? vec4(u_ink * k, k) : vec4(mix(c.rgb, u_ink, 0.85 * k), 1.0);
 }`;
 
+// glass over the canvas: its (premultiplied) colour, with a light outline from its depth
+const GLASS_FS = `#version 300 es
+precision highp float;
+uniform sampler2D u_col, u_dep; uniform vec2 u_px; uniform float u_thr, u_w; uniform vec3 u_ink;
+out vec4 o;
+void main() {
+  vec2 uv = gl_FragCoord.xy * u_px;
+  vec4 c = texture(u_col, uv);
+  float d = texture(u_dep, uv).r, near = 0.0;
+  for (int i = 0; i < 12; i++) {
+    float a = float(i) * 0.5235988;
+    near = max(near, d - texture(u_dep, uv + vec2(cos(a), sin(a)) * u_w * u_px).r);
+  }
+  float e = 0.45 * smoothstep(u_thr, 2.0 * u_thr, near);
+  o = c * (1.0 - e) + vec4(u_ink * e, e);
+}`;
+
 export function createGLView() {
   const canvas = document.createElement("canvas");
   let gl = canvas.getContext("webgl2", { antialias: false, alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: false });
@@ -80,7 +105,7 @@ export function createGLView() {
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
     return p;
   };
-  const prog = compile(VS, FS), edge = gl2 ? compile(EDGE_VS, EDGE_FS) : null;
+  const prog = compile(VS, FS), edge = gl2 ? compile(EDGE_VS, EDGE_FS) : null, glassComp = gl2 ? compile(EDGE_VS, GLASS_FS) : null;
   const A = name => gl.getAttribLocation(prog, name), U = (p, name) => gl.getUniformLocation(p, name);
 
   // one set of buffers per mesh slot ("cartoon", "surface"), so switching doesn't re-upload
@@ -128,10 +153,41 @@ export function createGLView() {
 
   // p: { W, H, rot (3×3 column-major), kz, kpx, R, pan, O, key (view space), bg [r, g, b] 0–1, fog, ink [r, g, b] 0–1,
   //      edge: px or 0, mode: 0 lit surface, 1 depth-shaded cartoon, depth: darkening at the back 0–1, faces: bool,
-  //      drange: [nearest, farthest] camera distance of the model in this view }
+  //      drange: [nearest, farthest] camera distance of the model in this view,
+  //      glass: a slot drawn see-through over the rest (lit as a surface), glassAlpha: its opacity 0–1 }
+  function uniforms(p, mode, alpha, fog) {
+    gl.useProgram(prog);
+    gl.uniformMatrix3fv(U(prog, "u_rot"), false, p.rot);
+    gl.uniform1f(U(prog, "u_kz"), p.kz); gl.uniform1f(U(prog, "u_kpx"), p.kpx); gl.uniform1f(U(prog, "u_R"), p.R);
+    gl.uniform2fv(U(prog, "u_pan"), p.pan); gl.uniform2fv(U(prog, "u_O"), p.O); gl.uniform2f(U(prog, "u_size"), p.W, p.H);
+    gl.uniform3fv(U(prog, "u_key"), p.key); gl.uniform3fv(U(prog, "u_bg"), p.bg); gl.uniform1f(U(prog, "u_fog"), fog); gl.uniform1f(U(prog, "u_mode"), mode);
+    gl.uniform1f(U(prog, "u_depth"), p.depth ?? 0.55); gl.uniform1f(U(prog, "u_faces"), p.faces ? 1 : 0);
+    gl.uniform2fv(U(prog, "u_drange"), p.drange || [0, 1]); gl.uniform1f(U(prog, "u_alpha"), alpha);
+  }
+  const ATTRS = ["a_pos", "a_nrm", "a_col", "a_ao", "a_band", "a_face"];
+  function draw(list) {
+    const attr = (an, b, size, type, normalized) => { const l = A(an); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, size, type, normalized, 0, 0); };
+    for (const s of list) {
+      attr("a_pos", s.pos, 3, gl.FLOAT, false); attr("a_nrm", s.nrm, 3, gl.FLOAT, false);
+      attr("a_col", s.col, 3, gl.UNSIGNED_BYTE, true); attr("a_ao", s.ao, 1, gl.FLOAT, false); attr("a_band", s.band, 1, gl.FLOAT, false); attr("a_face", s.face, 1, gl.FLOAT, false);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, s.idx);
+      gl.drawElements(gl.TRIANGLES, s.count, s.idxType, 0);
+    }
+    for (const an of ATTRS) gl.disableVertexAttribArray(A(an));
+  }
+  // the glass's front-most layer: depth first (it keeps whatever is already nearer), then colour where it won
+  function drawGlass(p, g) {
+    uniforms(p, 0, Math.max(0.02, Math.min(0.99, p.glassAlpha ?? 0.3)), 0);
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL);
+    gl.colorMask(false, false, false, false); draw([g]); gl.colorMask(true, true, true, true);
+    gl.depthMask(false); gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    draw([g]);
+    gl.disable(gl.BLEND); gl.depthMask(true);
+  }
   function render(p, names) {   // names: one mesh slot or several, drawn together into one depth buffer
     if (canvas.width !== p.W || canvas.height !== p.H) { canvas.width = p.W; canvas.height = p.H; }
     const list = (Array.isArray(names) ? names : [names]).map(n => slots[n]).filter(s => s && s.mesh && s.count);
+    const g = p.glass && slots[p.glass] && slots[p.glass].mesh && slots[p.glass].count ? slots[p.glass] : null;
     const outline = gl2 && p.edge > 0, target = outline ? buffers(p.W, p.H) : null;
     gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.ms : null);
     gl.viewport(0, 0, p.W, p.H);
@@ -139,39 +195,44 @@ export function createGLView() {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     if (list.length) {
       gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.disable(gl.CULL_FACE);
-      gl.useProgram(prog);
-      gl.uniformMatrix3fv(U(prog, "u_rot"), false, p.rot);
-      gl.uniform1f(U(prog, "u_kz"), p.kz); gl.uniform1f(U(prog, "u_kpx"), p.kpx); gl.uniform1f(U(prog, "u_R"), p.R);
-      gl.uniform2fv(U(prog, "u_pan"), p.pan); gl.uniform2fv(U(prog, "u_O"), p.O); gl.uniform2f(U(prog, "u_size"), p.W, p.H);
-      gl.uniform3fv(U(prog, "u_key"), p.key); gl.uniform3fv(U(prog, "u_bg"), p.bg); gl.uniform1f(U(prog, "u_fog"), p.fog); gl.uniform1f(U(prog, "u_mode"), p.mode || 0);
-      gl.uniform1f(U(prog, "u_depth"), p.depth ?? 0.55); gl.uniform1f(U(prog, "u_faces"), p.faces ? 1 : 0);
-      gl.uniform2fv(U(prog, "u_drange"), p.drange || [0, 1]);
-      const attr = (an, b, size, type, normalized) => { const l = A(an); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, size, type, normalized, 0, 0); };
-      for (const s of list) {
-        attr("a_pos", s.pos, 3, gl.FLOAT, false); attr("a_nrm", s.nrm, 3, gl.FLOAT, false);
-        attr("a_col", s.col, 3, gl.UNSIGNED_BYTE, true); attr("a_ao", s.ao, 1, gl.FLOAT, false); attr("a_band", s.band, 1, gl.FLOAT, false); attr("a_face", s.face, 1, gl.FLOAT, false);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, s.idx);
-        gl.drawElements(gl.TRIANGLES, s.count, s.idxType, 0);
-      }
-      for (const an of ["a_pos", "a_nrm", "a_col", "a_ao", "a_band", "a_face"]) gl.disableVertexAttribArray(A(an));
+      uniforms(p, p.mode || 0, 1, p.fog);
+      draw(list);
     }
-    if (target) {   // resolve, then outline into the canvas
+    if (!target) { if (g) drawGlass(p, g); return canvas; }   // WebGL1: straight into the canvas
+    // resolve, then outline into the canvas
+    const resolve = () => {
       gl.bindFramebuffer(gl.READ_FRAMEBUFFER, target.ms); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, target.rs);
       gl.blitFramebuffer(0, 0, p.W, p.H, 0, 0, p.W, p.H, gl.COLOR_BUFFER_BIT, gl.NEAREST);
       gl.blitFramebuffer(0, 0, p.W, p.H, 0, 0, p.W, p.H, gl.DEPTH_BUFFER_BIT, gl.NEAREST);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      gl.disable(gl.DEPTH_TEST);
-      gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.useProgram(edge);
-      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, target.col); gl.uniform1i(U(edge, "u_col"), 0);
-      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, target.dep); gl.uniform1i(U(edge, "u_dep"), 1);
-      gl.uniform2f(U(edge, "u_px"), 1 / p.W, 1 / p.H);
-      gl.uniform1f(U(edge, "u_thr"), 1.6 / (6 * p.R));   // a depth jump of more than ~1.6 Å (depth spans 6R)
-      gl.uniform1f(U(edge, "u_w"), p.edge); gl.uniform3fv(U(edge, "u_ink"), p.ink);
+    };
+    const pass = (pr, thr) => {
+      gl.useProgram(pr);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, target.col); gl.uniform1i(U(pr, "u_col"), 0);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, target.dep); gl.uniform1i(U(pr, "u_dep"), 1);
+      gl.uniform2f(U(pr, "u_px"), 1 / p.W, 1 / p.H);
+      gl.uniform1f(U(pr, "u_thr"), thr / (6 * p.R));   // a depth jump of more than thr Å (depth spans 6R)
+      gl.uniform1f(U(pr, "u_w"), p.edge); gl.uniform3fv(U(pr, "u_ink"), p.ink);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.activeTexture(gl.TEXTURE0);
+    };
+    resolve();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.disable(gl.DEPTH_TEST);
+    gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+    pass(edge, 1.6);
+    if (g) {   // the glass into the (still deep) offscreen buffer, alone, then over the canvas
+      gl.bindFramebuffer(gl.FRAMEBUFFER, target.ms);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      drawGlass(p, g);
+      resolve();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.disable(gl.DEPTH_TEST);
+      gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      pass(glassComp, 3);
+      gl.disable(gl.BLEND);
     }
     return canvas;
   }
-  return { canvas, gl2, setMesh, setColours, setAO, render, mesh: name => slots[name] && slots[name].mesh };
+  const maxSize = Math.min(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), gl.getParameter(gl.MAX_TEXTURE_SIZE), ...gl.getParameter(gl.MAX_VIEWPORT_DIMS));
+  return { canvas, gl2, maxSize, setMesh, setColours, setAO, render, mesh: name => slots[name] && slots[name].mesh };
 }

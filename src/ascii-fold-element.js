@@ -5,17 +5,21 @@ import { createAsciiFold } from "./engine.js";
 // Attributes (all optional):
 //   accession     UniProt accession to fetch from AlphaFold DB
 //   src           URL of a .pdb / .cif file to load instead (must be CORS-readable)
-//   theme         paper | night                      colour      ss | plddt | a ChimeraX colour name or hex
+//   view          URL of a saved view (.json from the app's Save view), applied after the structure loads
+//   theme         paper | night                      colour      ss | plddt | chain | a ChimeraX colour name or hex
 //   layout        lr | rl | ascii | ribbon
 //   perspective   0–1 (default 1; 0 = orthographic)
 //   depth         0–1, how much darker the back of the model gets (default 0.6)
 //   helix-faces   lighten helix turns facing the viewer, darken their insides (attribute present = on)
 //   sidechains    all | none: side chains as sticks with the cartoon
 //   ligands       off hides ligands and ions (shown by default)
-//   surface       show the molecular surface instead of the cartoon (attribute present = on)
+//   chains        which protein chains to draw, e.g. "A,B" (default: all)
+//   surface       show the molecular surface instead of the cartoon (attribute present = on);
+//                 "both": a see-through surface over the cartoon, as opaque as glass-opacity (0–1, default 0.3)
 //   glyphs        classic | blocks | geo | <custom ramp, light → dark>
 //   detail        xcoarse | coarse | medium | <rows>
 //   spin          rotation speed, 0–1 (default 0: still)
+//   motion        turn | rock (swing ±30°)
 //   blend-from / blend-to   where the text→ribbon blend starts/ends, 0–1
 //   interactive   "false" disables drag / zoom
 //   transparent   no background fill
@@ -27,7 +31,9 @@ import { createAsciiFold } from "./engine.js";
 const OPTION_ATTRS = {
   theme: v => ({ theme: v }), colour: v => ({ colour: v }), color: v => ({ colour: v }), layout: v => ({ layout: v }),
   glyphs: v => ({ glyphs: v }),
-  surface: v => ({ surface: v !== null && v !== "false" }),
+  surface: v => v === "both" ? { surface: false, glass: true } : { surface: v !== null && v !== "false", glass: false },
+  "glass-opacity": v => ({ glassOpacity: Math.max(0, Math.min(1, parseFloat(v) || 0)) }),
+  motion: v => ({ motion: v === "rock" ? "rock" : "turn" }),
   perspective: v => ({ perspective: Math.max(0, Math.min(1, parseFloat(v) || 0)) }),
   depth: v => ({ depth: Math.max(0, Math.min(1, parseFloat(v) || 0)) }),
   sidechains: v => ({ sidechains: v === "all" ? "all" : "none" }),
@@ -50,7 +56,7 @@ function requestFont() {
 }
 
 export class AsciiFoldElement extends HTMLElement {
-  static get observedAttributes() { return ["accession", "src", ...Object.keys(OPTION_ATTRS)]; }
+  static get observedAttributes() { return ["accession", "src", "chains", "view", ...Object.keys(OPTION_ATTRS)]; }
 
   constructor() {
     super();
@@ -90,6 +96,7 @@ export class AsciiFoldElement extends HTMLElement {
       this._credit.style.color = p.ink;
       this._credit.innerHTML = this.hasAttribute("no-credit") || !info.fromAFDB ? ""
         : info.entryUrl ? `<a href="${info.entryUrl}" target="_blank" rel="noopener">AlphaFold DB</a> · CC BY 4.0` : "AlphaFold DB · CC BY 4.0";
+      if (this.hasAttribute("chains")) this._chains();   // otherwise the engine's own default (all, or the first of a huge complex)
       this.dispatchEvent(new CustomEvent("fold-load", { detail: info }));
     });
     this._load();
@@ -100,10 +107,30 @@ export class AsciiFoldElement extends HTMLElement {
   attributeChangedCallback(name, oldV, newV) {
     if (!this.view || oldV === newV) return;
     if (name === "accession" || name === "src") { this._load(); return; }
+    if (name === "chains") { if (this.view.info) this._chains(); return; }
+    if (name === "view") { if (this.view.info) this._applyView(); return; }
     if (OPTION_ATTRS[name]) {
       const o = OPTION_ATTRS[name](newV);
       if (o.shape) this.view.setShape(o.shape); else this.view.set(o);
       if (name === "theme") this._credit.style.color = this.view.palette().ink;
+    }
+  }
+
+  _chains() {
+    const c = this.getAttribute("chains");
+    this.view.showChains(c ? c.split(/[\s,]+/).filter(Boolean) : null);
+  }
+
+  async _applyView() {
+    const url = this.getAttribute("view");
+    if (!url) return;
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`${url} returned ${r.status}`);
+      this.view.setView(await r.json());
+    } catch (e) {
+      this._err.textContent = e.message;
+      this.dispatchEvent(new CustomEvent("fold-error", { detail: e }));
     }
   }
 
@@ -118,6 +145,7 @@ export class AsciiFoldElement extends HTMLElement {
         this.view.loadText(await r.text(), { title: name, sub: name });
       } else if (acc) await this.view.loadAccession(acc);
       else this.view.loadDefault();
+      await this._applyView();
     } catch (e) {
       if (e.name === "AbortError") return;
       this._err.textContent = e.message;

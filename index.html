@@ -9,8 +9,8 @@
 <meta property="og:type" content="website">
 <meta property="og:title" content="ASCII Fold — proteins as text and ribbon">
 <meta property="og:description" content="Spin any AlphaFold DB structure as ASCII art that dissolves into a cartoon ribbon. Export GIFs, embed it anywhere.">
-<meta property="og:url" content="https://mitsenkov.github.io/ascii-fold/">
-<meta property="og:image" content="https://mitsenkov.github.io/ascii-fold/docs/og.png">
+<meta property="og:url" content="https://samuel-novak-dev.github.io/ascii-fold/">
+<meta property="og:image" content="https://samuel-novak-dev.github.io/ascii-fold/docs/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="A protein drawn in coloured ASCII characters on the left, turning into a red, blue and gold cartoon ribbon on the right">
@@ -43,8 +43,10 @@
   <aside id="panel" aria-label="Display settings">
     <section>
       <h3>Show</h3>
-      <div class="seg" id="surface"><button data-v="off" class="on">Cartoon</button><button data-v="on">Surface</button></div>
+      <div class="seg" id="surface"><button data-v="off" class="on">Cartoon</button><button data-v="on">Surface</button><button data-v="glass" title="A see-through surface over the cartoon">Both</button></div>
+      <label class="slider" id="glassRow" hidden><span>Opacity</span><input id="glassOp" type="range" min="5" max="80" value="30" title="How opaque the surface over the cartoon is"></label>
       <div class="seg" id="sidechains" title="Side chains as sticks, with the cartoon; Selected follows the sequence selection"><button data-v="off" class="on">No side chains</button><button data-v="sel">Selected</button><button data-v="all">All</button></div>
+      <div class="chips" id="chainRow" role="group" aria-label="Chains shown" hidden></div>
       <div class="seg" id="ligands" title="Ligands and ions as sticks and balls, with the cartoon or the surface"><button data-v="on" class="on">Ligands</button><button data-v="off">No ligands</button></div>
       <div class="seg grid2" id="layout"><button data-v="lr" class="on">Text → model</button><button data-v="rl">Model → text</button><button data-v="ascii">Text only</button><button data-v="ribbon">Model only</button></div>
     </section>
@@ -52,7 +54,7 @@
     <section>
       <h3>Colour <span id="colourTarget" class="target">all</span></h3>
       <div class="seg" id="pickSS" role="group" aria-label="Select by structure"><button data-v="H" title="Select every helix residue (Shift adds)">Helices</button><button data-v="E" title="Select every strand residue (Shift adds)">Strands</button><button data-v="C" title="Select every loop residue (Shift adds)">Loops</button></div>
-      <div class="seg" id="colour"><button data-v="ss" class="on">Structure</button><button data-v="plddt" id="plddtBtn" disabled title="Colour by the B-factor column (pLDDT in predicted models)">pLDDT</button></div>
+      <div class="seg" id="colour"><button data-v="ss" class="on">Structure</button><button data-v="plddt" id="plddtBtn" disabled title="Colour by the B-factor column (pLDDT in predicted models)">pLDDT</button><button data-v="chain" id="chainBtn" disabled title="One colour per chain">Chain</button></div>
       <div class="swatches" id="swatches" role="group" aria-label="Colours"></div>
       <button type="button" class="link" id="moreCol" aria-expanded="false">More colours</button>
       <div class="swatches basic" id="moreSwatches" role="group" aria-label="ChimeraX basic colours" hidden></div>
@@ -64,6 +66,7 @@
       <div class="seg" id="theme"><button data-v="paper" class="on">Paper</button><button data-v="night">Night</button></div>
       <div class="seg" id="detail"><button data-v="xcoarse">X-coarse</button><button data-v="coarse">Coarse</button><button data-v="medium" class="on">Medium</button></div>
       <label class="slider"><span>Spin</span><input id="speed" type="range" min="0" max="100" value="0"></label>
+      <div class="seg" id="motion" title="Turn all the way round, or rock back and forth (±30°)"><button data-v="turn" class="on">Turn</button><button data-v="rock">Rock</button></div>
       <label class="slider"><span>Perspective</span><input id="persp" type="range" min="0" max="100" value="100"></label>
       <label class="slider"><span>Depth</span><input id="depth" type="range" min="0" max="100" value="60" title="How dark the back-most parts get; the front always stays full colour"></label>
       <div class="seg" id="faces" title="Lighten helix turns facing you, darken the far side seen through them"><button data-v="off" class="on">Helix faces off</button><button data-v="on">On</button></div>
@@ -87,8 +90,11 @@
     </details>
 
     <section class="actions">
-      <button class="btn" type="button" id="png">Snapshot</button>
-      <button class="btn" type="button" id="gifBtn">GIF</button>
+      <button class="btn" type="button" id="png">Image</button>
+      <button class="btn" type="button" id="gifBtn">Animation</button>
+      <button class="btn ghost" type="button" id="viewSave" title="Save the view (settings, angle, colours, labels) as a small .json file">Save view</button>
+      <button class="btn ghost" type="button" id="viewOpen" title="Open a saved view (.json) on the loaded structure; you can also drop it on the page">Open view</button>
+      <input type="file" id="viewFile" accept=".json,application/json" hidden>
     </section>
   </aside>
 </div>
@@ -98,6 +104,8 @@
     <h3>Sequence</h3>
     <span id="selInfo" class="selinfo"></span>
     <button type="button" class="link" id="selClear" hidden>Clear selection</button>
+    <button type="button" class="link" id="selLabel" hidden title="Pin a label on each selected residue and ligand (or click one in the view)">Label selected</button>
+    <button type="button" class="link" id="labClear" hidden>Clear labels</button>
     <button type="button" class="link" id="colReset" hidden>Reset colours</button>
   </div>
   <div class="seqscroll" id="seqScroll"><div class="seqtrack" id="seqTrack"></div></div>
@@ -106,10 +114,16 @@
 
 <div id="gifDlg" class="dlg" hidden role="dialog" aria-modal="true" aria-labelledby="gifTitle">
   <div class="card">
-    <h2 id="gifTitle">Export GIF</h2>
-    <p class="note">One seamless turn of the current view: same angle, zoom, colours and blend. The turn speed follows the Spin slider.</p>
+    <h2 id="gifTitle">Export animation</h2>
+    <p class="note">One seamless loop of the current view (same angle, zoom, colours and blend): a full turn, or one swing back and forth with Rock.</p>
+    <div class="ctl"><label>Format</label>
+      <div class="seg" id="aniFmt"><button data-v="gif" class="on">GIF</button><button data-v="video">Video</button></div>
+    </div>
+    <div class="ctl"><label>Motion</label>
+      <div class="seg" id="aniMotion"><button data-v="turn" class="on">Turn</button><button data-v="rock">Rock</button></div>
+    </div>
     <div class="ctl"><label for="gifSpin">Spin</label><input id="gifSpin" type="range" min="10" max="100" value="35"><span id="gifTurnTime" class="zval"></span></div>
-    <div class="ctl"><label>Frame rate</label>
+    <div class="ctl" id="gifFpsRow"><label>Frame rate</label>
       <div class="seg" id="gifFps"><button data-v="50" class="on">Smooth · 20 fps</button><button data-v="70">Balanced · 14 fps</button><button data-v="100">Light · 10 fps</button></div>
     </div>
     <div class="ctl"><label>Width</label>
@@ -126,8 +140,23 @@
   </div>
 </div>
 
-<div id="snap" hidden>
-  <div><img alt="Snapshot of the current frame"><p>Right-click or long-press to save · click outside to close</p></div>
+<div id="imgDlg" class="dlg" hidden role="dialog" aria-modal="true" aria-labelledby="imgTitle">
+  <div class="card">
+    <h2 id="imgTitle">Export image</h2>
+    <p class="note">The current view as a PNG, cropped to the protein. Larger sizes are rendered afresh, with sharp text, not scaled up.</p>
+    <div class="ctl"><label>Size</label>
+      <div class="seg" id="imgScale"><button data-v="1">1×</button><button data-v="2" class="on">2×</button><button data-v="4">4×</button></div>
+      <span id="imgPx" class="zval"></span>
+    </div>
+    <div class="ctl"><label>Background</label>
+      <div class="seg" id="imgBg"><button data-v="paper" class="on">Paper</button><button data-v="none">Transparent</button></div>
+    </div>
+    <div id="imgOut"></div>
+    <div class="row">
+      <a class="btn" id="imgSave" download="ascii-fold.png">Download</a>
+      <button class="btn ghost" type="button" id="imgClose">Close</button>
+    </div>
+  </div>
 </div>
 
 <script type="module" src="./src/app.js"></script>

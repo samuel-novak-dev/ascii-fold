@@ -106,6 +106,15 @@ input[type=range] { accent-color: var(--red); width: 100%; margin: 0; }
 .seqtrack .aa i.sel { background: var(--ink); color: var(--paper) !important; }
 .seqtrack .num { position: absolute; top: 35px; left: 0; height: 14px; font: 500 9.5px "JetBrains Mono", ui-monospace, monospace; color: var(--mute); }
 .seqtrack .num span { position: absolute; top: 0; white-space: nowrap; }
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.chips::before { content: "Chains"; font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--mute); margin-right: 4px; }
+.chips button { display: inline-flex; align-items: center; gap: 5px; font: 700 11px/20px "JetBrains Mono", ui-monospace, Menlo, monospace; color: var(--mute);
+  background: none; border: 1px solid color-mix(in srgb, var(--mute) 60%, transparent); border-radius: 10px; padding: 0 8px; cursor: pointer; }
+.chips button i { width: 9px; height: 9px; border-radius: 50%; background: var(--c); opacity: .35; }
+.chips button.on { color: var(--ink); border-color: var(--ink); }
+.chips button.on i { opacity: 1; }
+.chips button small { font-weight: 500; color: var(--mute); }
+.seqtrack .aa u { text-decoration: none; width: calc(var(--rw) * 2); text-align: center; color: var(--mute); font-size: 10px; }
 .ligs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; }
 .ligs::before { content: "Ligands"; font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--mute); margin-right: 4px; }
 .ligs button { display: inline-flex; align-items: center; gap: 5px; font: 700 11px/18px "JetBrains Mono", ui-monospace, Menlo, monospace;
@@ -118,17 +127,13 @@ input[type=range] { accent-color: var(--red); width: 100%; margin: 0; }
 
 /* ---------- dialogs ---------- */
 .ctl { display: flex; align-items: center; gap: 8px; }
+[hidden] { display: none !important; }   /* the hidden attribute wins over any display rule */
 .ctl label { color: var(--mute); }
 .ctl .seg { display: inline-flex; }
 .ctl .seg button { flex: none; padding: 5px 9px; font-size: 11px; }
 .ctl input[type=range] { width: 120px; }
 .zval { font: 600 12px "JetBrains Mono", ui-monospace, monospace; min-width: 42px; }
 
-#snap { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 10; }
-#snap[hidden] { display: none; }
-#snap > div { text-align: center; }
-#snap img { max-width: 90vw; max-height: 80vh; box-shadow: 0 10px 40px rgba(0,0,0,.4); }
-#snap p { color: #fff; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
 
 .dlg { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 11; padding: 16px; }
 .dlg[hidden] { display: none; }
@@ -140,6 +145,9 @@ input[type=range] { accent-color: var(--red); width: 100%; margin: 0; }
 .dlg a.btn { text-decoration: none; }
 .dlg .bar { height: 6px; background: color-mix(in srgb, var(--ink) 12%, transparent); }
 .dlg .bar i { display: block; height: 100%; width: 0; background: var(--red); transition: width .1s; }
+#imgOut img, #gifOut video { display: block; max-width: 100%; max-height: 46vh; margin: 0 auto; border: 1px solid color-mix(in srgb, var(--ink) 20%, transparent); }
+#imgOut img.clear { background: repeating-conic-gradient(#ddd 0 25%, #fff 0 50%) 0 0 / 16px 16px; }
+#imgOut p { text-transform: none; letter-spacing: .02em; color: var(--mute); margin: 6px 0 0; text-align: center; }
 #gifOut img { display: block; max-width: 100%; max-height: 46vh; margin: 0 auto; border: 1px solid color-mix(in srgb, var(--ink) 20%, transparent); }
 #gifOut p { text-transform: none; letter-spacing: .02em; color: var(--mute); margin: 6px 0 0; text-align: center; }
 
