@@ -122,19 +122,25 @@ function blobMesh(C, R, owner, B) {
  *  directions over the vertex's hemisphere along which no part of the protein lies within ~11 Å. */
 export function meshAO(mesh) {
   if (mesh.ao) return mesh.ao;
-  const { F, nx, ny, nz, h, ox, oy, oz } = mesh.grid, P = mesh.P, N = mesh.N, nv = mesh.nv;
-  const K = 40, dirs = [], golden = Math.PI * (3 - Math.sqrt(5)), STEPS = 9, STEP = 1.25, LIFT = 0.7;
-  for (let j = 0; j < K; j++) {
-    const y = 1 - 2 * (j + 0.5) / K, r = Math.sqrt(1 - y * y), ph = j * golden;
-    dirs.push([r * Math.cos(ph), y, r * Math.sin(ph)]);
-  }
+  const { F, nx, ny, nz, h, ox, oy, oz } = mesh.grid;
   const inside = (x, y, z) => {
     const i = Math.round((x - ox) / h), j = Math.round((y - oy) / h), k = Math.round((z - oz) / h);
     return i >= 0 && j >= 0 && k >= 0 && i < nx && j < ny && k < nz && F[i + nx * (j + ny * k)] > 1;
   };
-  const ao = new Float32Array(nv);
-  for (let v = 0; v < nv; v++) {
-    const n0 = N[v * 3], n1 = N[v * 3 + 1], n2 = N[v * 3 + 2];
+  return mesh.ao = rayAO(mesh.P, mesh.N, mesh.nv, inside);
+}
+
+/** The ray casting behind meshAO, for any mesh and any "is this point inside something" test.
+ *  sheet (optional, per vertex): 1 for a two-sided sheet, which is lit from both sides.
+ *  Rays start LIFT Å off the surface and take STEPS steps of STEP Å. */
+export function rayAO(P, N, nv, inside, sheet = null, { LIFT = 0.7, STEP = 1.25, STEPS = 9 } = {}) {
+  const K = 40, dirs = [], golden = Math.PI * (3 - Math.sqrt(5));
+  for (let j = 0; j < K; j++) {
+    const y = 1 - 2 * (j + 0.5) / K, r = Math.sqrt(1 - y * y), ph = j * golden;
+    dirs.push([r * Math.cos(ph), y, r * Math.sin(ph)]);
+  }
+  const side = (v, sg) => {
+    const n0 = N[v * 3] * sg, n1 = N[v * 3 + 1] * sg, n2 = N[v * 3 + 2] * sg;
     const px = P[v * 3] + n0 * LIFT, py = P[v * 3 + 1] + n1 * LIFT, pz = P[v * 3 + 2] + n2 * LIFT;
     let open = 0, all = 0;
     for (const d of dirs) {
@@ -144,9 +150,11 @@ export function meshAO(mesh) {
       for (let s = 1; s <= STEPS && !hit; s++) hit = inside(px + d[0] * s * STEP, py + d[1] * s * STEP, pz + d[2] * s * STEP);
       all += w; if (!hit) open += w;
     }
-    ao[v] = all ? open / all : 1;
-  }
-  return mesh.ao = ao;
+    return all ? open / all : 1;
+  };
+  const ao = new Float32Array(nv);
+  for (let v = 0; v < nv; v++) ao[v] = sheet && sheet[v] ? (side(v, 1) + side(v, -1)) / 2 : side(v, 1);
+  return ao;
 }
 
 /** Points about `spacing` apart on the mesh (for the 3D text), with normals, residues and the

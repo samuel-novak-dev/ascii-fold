@@ -1,11 +1,12 @@
-import { add, mul, dot, norm, dist } from "./vec.js";
+import { add, sub, mul, dot, cross, norm, dist } from "./vec.js";
 import { buildGeometry, SHAPE_DEFAULT } from "./geometry.js";
 import { parsePDB, parseStructure, readStructureFile } from "./parse.js";
 import { fetchAFDB, describeAFDB } from "./afdb.js";
 import KRAS_6GJ8 from "./data/kras-6gj8.js";
 import { GIFEncoder, quantize, applyPalette } from "./vendor/gifenc.js";
 import { surfaceMesh, meshAO, meshPoints, RES_BALL } from "./surface.js";
-import { createSurfaceGL } from "./glsurface.js";
+import { createGLView } from "./glview.js";
+import { cartoonMesh, cartoonAO } from "./cartoon.js";
 
 // ---------------------------------------------------------------------------------------
 // createAsciiFold(container, options) → view
@@ -73,6 +74,16 @@ const CELL = 64, FOGS = 6, FOG_MAX = 0.55;   // glyph atlas: px per sprite, dept
 const LIGHT = norm([-0.45, 0.55, 0.75]);   // key light, from the upper left front
 // depth cue as in ChimeraX: nothing in the front half, rising to full strength at the back
 // (dt: 0 at the back of the model, 1 at the front)
+// Orientation is a rotation matrix (3×3, row-major) from model to view coordinates, turned like a
+// trackball: every drag and the spin rotate about the screen's own axes, with no limits.
+const rotMat = (y, x) => { const cy = Math.cos(y), sy = Math.sin(y), cx = Math.cos(x), sx = Math.sin(x); return [cy, 0, sy, sx * sy, cx, -sx * cy, -cx * sy, sx, cx * cy]; };
+const matMul = (A, B) => { const C = new Array(9); for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) C[r * 3 + c] = A[r * 3] * B[c] + A[r * 3 + 1] * B[3 + c] + A[r * 3 + 2] * B[6 + c]; return C; };
+const turn = (aboutY, aboutX, M) => {   // rotate about the screen's vertical, then horizontal axis; re-orthonormalise
+  const T = matMul(rotMat(0, aboutX), matMul(rotMat(aboutY, 0), M));
+  const r0 = norm(T.slice(0, 3)), r1 = norm(sub(T.slice(3, 6), mul(r0, dot(T.slice(3, 6), r0))));
+  return [...r0, ...r1, ...cross(r0, r1)];
+};
+const HOME = rotMat(0.6, -0.35);
 const fogOf = dt => Math.max(0, Math.min(1, (0.5 - dt) / 0.5));
 const hex = h => { h = h.trim().replace("#", ""); return [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16)); };
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / Math.max(1e-6, b - a))); return t * t * (3 - 2 * t); };
@@ -111,7 +122,7 @@ export function createAsciiFold(container, options = {}) {
   // ---------- state ----------
   let G = null, lastParsed = null, info = null;
   let COLS = 112, ROWS = 64, cw = 8, lh = 13, aspect = 0.6;
-  let rotY = 0.6, rotX = -0.35, zoom = 1, panX = 0, panY = 0;
+  let Rm = HOME.slice(), zoom = 1, panX = 0, panY = 0;
   let mimg, HASH, zbuf, lbuf, cbuf, fcol, dbuf, lastGrid = [];
   let PAL = null, SOLID = null, ramp = GLYPHS.classic;
   let geomId = 0, txtDirty = false, fontEpoch = 0, surfBalls = null;
@@ -199,7 +210,7 @@ export function createAsciiFold(container, options = {}) {
   }
   function panBy(dxPx, dyPx) { const S = baseScale() * zoom; panX += dxPx / cw / S; panY -= dyPx / lh / (S * aspect); }
   function cellAt(x, y) { const r = inner.getBoundingClientRect(); return [(x - r.left) / cw, (y - r.top) / lh]; }
-  function resetView(rotation = false) { zoom = 1; panX = 0; panY = 0; if (rotation) { rotY = 0.6; rotX = -0.35; } emit("zoom", zoom); }
+  function resetView(rotation = false) { zoom = 1; panX = 0; panY = 0; if (rotation) Rm = HOME.slice(); emit("zoom", zoom); }
   const asciiAmount = u => o.layout === "ascii" ? 1 : o.layout === "ribbon" ? 0 : 1 - smooth(o.blendFrom, o.blendTo, o.layout === "lr" ? u : 1 - u);
 
   // ---------- frame ----------
@@ -207,8 +218,8 @@ export function createAsciiFold(container, options = {}) {
   function render(grid = false) {   // grid: also fill the character grid, for Copy text
     if (!G || !HASH) return;
     const pts = G.pts, R = fitR();
-    const cy = Math.cos(rotY), sy = Math.sin(rotY), cx = Math.cos(rotX), sx = Math.sin(rotX);
-    const rot = v => { const x = v[0] * cy + v[2] * sy, z0 = -v[0] * sy + v[2] * cy; return [x, v[1] * cx - z0 * sx, v[1] * sx + z0 * cx]; };
+    const [m0, m1, m2, m3, m4, m5, m6, m7, m8] = Rm;
+    const rot = v => [m0 * v[0] + m1 * v[1] + m2 * v[2], m3 * v[0] + m4 * v[1] + m5 * v[2], m6 * v[0] + m7 * v[1] + m8 * v[2]];
     const S = baseScale() * zoom, ox = COLS / 2, oy = ROWS / 2;
     // perspective: points nearer the camera (larger z) are drawn larger; pan stays a screen-space shift
     const kz = Math.max(0, Math.min(1, +o.perspective || 0)) * PERSP / R, scl = z => 1 / Math.max(0.3, 1 - kz * z);
@@ -260,7 +271,8 @@ export function createAsciiFold(container, options = {}) {
     const kpx = S * aspect * lh * dpr, OX = ox * cw * dpr, OY = oy * lh * dpr;
     const X = v => OX + (v[0] * scl(v[2]) + panX) * kpx, Y = v => OY - (v[1] * scl(v[2]) + panY) * kpx;
     const polys = [];
-    if (o.layout !== "ascii" && !o.surface) {
+    const gl3d = o.layout !== "ascii" && !!view3d();   // the model goes through WebGL when it can
+    if (o.layout !== "ascii" && !o.surface && !gl3d) {   // fallback: the cartoon painted in 2D
       const SN = new Array(pts.length), NN = new Array(pts.length);
       for (let k = 0; k < pts.length; k++) { SN[k] = rot(pts[k].side); NN[k] = rot(pts[k].nrm); }
       let cylRun = null;
@@ -329,14 +341,14 @@ export function createAsciiFold(container, options = {}) {
         rctx.closePath(); rctx.fill(); rctx.stroke();
       }
     }
-    if (o.surface && o.layout !== "ascii") drawSurface({ cy, sy, cx, sx, kz, scl, kpx, OX, OY, R, lit });
+    if (o.layout !== "ascii" && (o.surface || gl3d)) drawModel({ Rm, kz, scl, kpx, OX, OY, R, lit, dpr });
     mctx.putImageData(mimg, 0, 0);
     rctx.globalCompositeOperation = "destination-in";
     rctx.imageSmoothingEnabled = false;
     rctx.drawImage(mask, 0, 0, rib.width, rib.height);
     rctx.globalCompositeOperation = "source-over";
 
-    if (space) drawText3D({ cy, sy, cx, sx, S, kz, scl, kpx, OX, OY, dpr, R, lit });
+    if (space) drawText3D({ Rm, S, kz, scl, kpx, OX, OY, dpr, R, lit });
     else if (txtDirty) { tctx.setTransform(1, 0, 0, 1, 0, 0); tctx.clearRect(0, 0, txt.width, txt.height); txtDirty = false; }
   }
 
@@ -510,27 +522,35 @@ export function createAsciiFold(container, options = {}) {
     return { Pp, Nn, res };
   }
 
-  // ---------- the solid surface: a triangle mesh drawn with WebGL ----------
-  let meshState = null, sgl;   // sgl: WebGL renderer; undefined until tried, null if unavailable
+  // ---------- the model in 3D: the cartoon or surface mesh, drawn with WebGL ----------
+  let meshState = null, cartState = null, glv;   // glv: WebGL renderer; undefined until tried, null if unavailable
   function mesh() {
     if (!meshState || meshState.id !== geomId) meshState = { id: geomId, m: surfaceMesh(G), colKey: "", aoOn: false };
     return meshState.m;
   }
-  function drawSurface(F) {
-    if (sgl === undefined) { try { sgl = createSurfaceGL(); } catch { sgl = null; } }
-    if (!sgl) return drawSurfels(F);
-    const m = mesh(), st = meshState, t = colours();
-    if (sgl.mesh !== m) { sgl.setMesh(m); st.colKey = ""; st.aoOn = false; }
+  function cartMesh() {
+    if (!cartState || cartState.id !== geomId) cartState = { id: geomId, m: cartoonMesh(G, shape), colKey: "", aoOn: false };
+    return cartState.m;
+  }
+  function view3d() {
+    if (glv === undefined) { try { glv = createGLView(); } catch { glv = null; } }
+    return glv;
+  }
+  function drawModel(F) {
+    const v = view3d();
+    if (!v) { if (o.surface) drawSurfels(F); return; }   // no WebGL: the 2D ribbon was drawn already
+    const name = o.surface ? "surface" : "cartoon", m = o.surface ? mesh() : cartMesh(), st = o.surface ? meshState : cartState, t = colours();
+    if (v.mesh(name) !== m) { v.setMesh(name, m); st.colKey = ""; st.aoOn = false; }
     if (st.colKey !== t.key) {           // per-vertex colour from its residue
       const rgb = new Uint8Array(m.nv * 3);
-      for (let v = 0; v < m.nv; v++) { const c = t.list[t.rc[m.res[v]]].rgb; rgb[v * 3] = c[0]; rgb[v * 3 + 1] = c[1]; rgb[v * 3 + 2] = c[2]; }
-      sgl.setColours(rgb); st.colKey = t.key;
+      for (let i = 0; i < m.nv; i++) { const c = t.list[t.rc[m.res[i]]].rgb; rgb[i * 3] = c[0]; rgb[i * 3 + 1] = c[1]; rgb[i * 3 + 2] = c[2]; }
+      v.setColours(name, rgb); st.colKey = t.key;
     }
-    if (!st.aoOn) { sgl.setAO(meshAO(m)); st.aoOn = true; }
-    const { cy, sy, cx, sx } = F;
-    const c = sgl.render({ W: rib.width, H: rib.height, rot: [cy, sx * sy, -cx * sy, 0, cx, sx, sy, -sx * cy, cx * cy],
+    if (!st.aoOn) { v.setAO(name, o.surface ? meshAO(m) : cartoonAO(m)); st.aoOn = true; }
+    const M = F.Rm;
+    const c = v.render({ W: rib.width, H: rib.height, rot: [M[0], M[3], M[6], M[1], M[4], M[7], M[2], M[5], M[8]],   // column-major
       kz: F.kz, kpx: F.kpx, R: F.R, pan: [panX, panY], O: [F.OX, F.OY], key: LIGHT,
-      bg: PAL.paper.map(v => v / 255), fog: 0.75 });
+      bg: PAL.paper.map(x => x / 255), fog: 0.75, ink: [0.08, 0.08, 0.08], edge: Math.max(1, 1.25 * F.dpr) }, name);
     rctx.setTransform(1, 0, 0, 1, 0, 0);
     rctx.drawImage(c, 0, 0);
   }
@@ -556,7 +576,7 @@ export function createAsciiFold(container, options = {}) {
   }
 
   function drawSurfels(F) {
-    const { cy, sy, cx, sx, kz, scl, kpx, OX, OY, R, lit } = F;
+    const { kz, scl, kpx, OX, OY, R, lit } = F, [m0, m1, m2, m3, m4, m5, m6, m7, m8] = F.Rm;
     const sf = surface(textStep());
     if (!sf.ao) sf.ao = surfaceAO(sf);
     const { n, P: SP, N: SN, res, zs, tx, ty, tg, tr, tk, ord } = sf;   // shares buffers with the 3D text, which runs after
@@ -564,10 +584,10 @@ export function createAsciiFold(container, options = {}) {
     let cnt = 0;
     for (let i = 0; i < n; i++) {
       const i3 = i * 3;
-      let a = SN[i3], b = SN[i3 + 1], c = SN[i3 + 2], t0 = a * cy + c * sy, z0 = -a * sy + c * cy;
-      const wx = t0, wy = b * cx - z0 * sx, wz = b * sx + z0 * cx;
-      a = SP[i3]; b = SP[i3 + 1]; c = SP[i3 + 2]; t0 = a * cy + c * sy; z0 = -a * sy + c * cy;
-      const vx = t0, vy = b * cx - z0 * sx, vz = b * sx + z0 * cx;
+      let a = SN[i3], b = SN[i3 + 1], c = SN[i3 + 2];   // rotate the normal (w) and the position (v)
+      const wx = m0 * a + m1 * b + m2 * c, wy = m3 * a + m4 * b + m5 * c, wz = m6 * a + m7 * b + m8 * c;
+      a = SP[i3]; b = SP[i3 + 1]; c = SP[i3 + 2];
+      const vx = m0 * a + m1 * b + m2 * c, vy = m3 * a + m4 * b + m5 * c, vz = m6 * a + m7 * b + m8 * c;
       if (wz - kz * (wx * vx + wy * vy + wz * vz) <= 0) continue;              // back side: covered by the front
       const sc = scl(vz), X = OX + (vx * sc + panX) * kpx, Y = OY - (vy * sc + panY) * kpx, d = d0 * sc;
       if (X < -d || Y < -d || X > W + d || Y > H + d) continue;
@@ -615,7 +635,7 @@ export function createAsciiFold(container, options = {}) {
   }
 
   function drawText3D(F) {
-    const { cy, sy, cx, sx, kz, scl, kpx, OX, OY, dpr, R, lit } = F;
+    const { kz, scl, kpx, OX, OY, dpr, R, lit } = F, [m0, m1, m2, m3, m4, m5, m6, m7, m8] = F.Rm;
     const step = textStep(), sf = surface(step);
     if (!sf.ao) sf.ao = surfaceAO(sf);
     const { n, P: SP, N: SN, res, hash, ix, wn, zs, tx, ty, tm, tg, tr, tk, ord } = sf;
@@ -631,10 +651,10 @@ export function createAsciiFold(container, options = {}) {
     let m = 0;
     for (let i = 0; i < n; i++) {
       const i3 = i * 3;
-      let a = SN[i3], b = SN[i3 + 1], c = SN[i3 + 2], t0 = a * cy + c * sy, z0 = -a * sy + c * cy;
-      const wx = t0, wy = b * cx - z0 * sx, wz = b * sx + z0 * cx;
-      a = SP[i3]; b = SP[i3 + 1]; c = SP[i3 + 2]; t0 = a * cy + c * sy; z0 = -a * sy + c * cy;
-      const vx = t0, vy = b * cx - z0 * sx, vz = b * sx + z0 * cx;
+      let a = SN[i3], b = SN[i3 + 1], c = SN[i3 + 2];   // rotate the normal (w) and the position (v)
+      const wx = m0 * a + m1 * b + m2 * c, wy = m3 * a + m4 * b + m5 * c, wz = m6 * a + m7 * b + m8 * c;
+      a = SP[i3]; b = SP[i3 + 1]; c = SP[i3 + 2];
+      const vx = m0 * a + m1 * b + m2 * c, vy = m3 * a + m4 * b + m5 * c, vz = m6 * a + m7 * b + m8 * c;
       if (wz - kz * (wx * vx + wy * vy + wz * vz) <= 0.02) continue;          // faces away from the camera
       const sc = scl(vz), X = OX + (vx * sc + panX) * kpx, Y = OY - (vy * sc + panY) * kpx;
       if (X < -cwp || Y < -lhp || X > W + cwp || Y > H + lhp) continue;
@@ -711,7 +731,7 @@ export function createAsciiFold(container, options = {}) {
     if (destroyed) return;
     const dt = Math.min(0.05, (t - prev) / 1000); prev = t;
     if (capturing) { raf = 0; return; }
-    if (!dragging) rotY += o.spin * dt * 1.6;
+    if (!dragging && o.spin) Rm = turn(o.spin * dt * 1.6, 0, Rm);
     render();
     if (visible) raf = requestAnimationFrame(loop);
   }
@@ -753,7 +773,7 @@ export function createAsciiFold(container, options = {}) {
     if (!dragging) return;
     const dx = e.clientX - lx, dy = e.clientY - ly; lx = e.clientX; ly = e.clientY;
     if (panning) panBy(dx, dy);
-    else { rotY += dx * 0.008; rotX = Math.max(-1.5, Math.min(1.5, rotX + dy * 0.008)); }
+    else Rm = turn(dx * 0.008, dy * 0.008, Rm);
   });
   const endPtr = e => {
     ptrs.delete(e.pointerId);
@@ -850,8 +870,9 @@ export function createAsciiFold(container, options = {}) {
     loadDefault() { loadToken++; return setStructure(parsePDB(KRAS_6GJ8), { title: "KRAS G12D", sub: "PDB 6GJ8 · chain A" }); },
     zoomBy(f) { zoomAt(f); kick(); return api; },
     /** Set the viewing angle in radians (y = spin axis, x = tilt). */
-    setRotation(y, x = rotX) { rotY = y; rotX = Math.max(-1.5, Math.min(1.5, x)); kick(); return api; },
-    get rotation() { return { y: rotY, x: rotX }; },
+    setRotation(y, x = -0.35) { Rm = rotMat(y, x); kick(); return api; },
+    /** The current orientation as a 3×3 row-major rotation matrix (model → view). */
+    get rotation() { return { matrix: Rm.slice() }; },
     resetView() { resetView(); kick(); return api; },
     /** Current frame as plain text (the flat character grid, also in 3D mode). */
     text() {
@@ -874,14 +895,14 @@ export function createAsciiFold(container, options = {}) {
       if (!G) throw new Error("Nothing loaded");
       if (capturing) throw new Error("Already recording");
       capturing = true;
-      const y0 = rotY, x0 = rotX, tick = () => new Promise(r => setTimeout(r, 0));
+      const R0 = Rm.slice(), tick = () => new Promise(r => setTimeout(r, 0));
       try {
         render();
         const box = cropBox(crop), scale = width / (box.w + pad * 2);
         const W = Math.round(width), H = Math.round((box.h + pad * 2) * scale);
         const c = document.createElement("canvas"); c.width = W; c.height = H;
         const ctx = c.getContext("2d", { willReadFrequently: true });
-        const frameAt = i => { rotY = y0 + (2 * Math.PI * i) / frames; rotX = x0; render(); composeFrame(ctx, box, scale, pad); return ctx.getImageData(0, 0, W, H).data; };
+        const frameAt = i => { Rm = turn((2 * Math.PI * i) / frames, 0, R0); render(); composeFrame(ctx, box, scale, pad); return ctx.getImageData(0, 0, W, H).data; };
         // one shared palette from a few spread-out frames keeps colours from flickering
         const picks = [0, 0.25, 0.5, 0.75].map(f => Math.floor(f * frames));
         const sample = new Uint8ClampedArray(W * H * 4 * picks.length);
@@ -897,7 +918,7 @@ export function createAsciiFold(container, options = {}) {
         gif.finish();
         return new Blob([gif.bytes()], { type: "image/gif" });
       } finally {
-        rotY = y0; rotX = x0; capturing = false; render(); kick();
+        Rm = R0; capturing = false; render(); kick();
       }
     },
     palette() { return { ...PAL.css }; },
