@@ -114,6 +114,7 @@ function buildSequence() {
   const nums = residues.map((r, i) => r.num % 10 === 0 ? `<span style="left:${i * RW}px">${r.num}</span>` : "").join("");
   $("seqTrack").style.width = n * RW + "px";
   $("seqTrack").innerHTML = `<div class="sse" style="width:${n * RW}px">${sse}</div><div class="aa">${aa}</div><div class="num">${nums}</div>`;
+  for (const b of $("pickSS").querySelectorAll("button")) b.disabled = !residues.some(r => r.ss === b.dataset.v);
   paintSequence(); showSelection(); renderLegend();
 }
 function paintSequence() {   // each letter in its residue's current colour
@@ -131,6 +132,7 @@ function ranges() {          // the selection as residue-number ranges: "12–30
 }
 function showSelection() {
   $("seqTrack").querySelectorAll(".aa i").forEach((c, i) => c.classList.toggle("sel", sel.has(i)));
+  for (const b of $("pickSS").querySelectorAll("button")) b.classList.toggle("on", allOf(b.dataset.v));
   const n = sel.size;
   $("selClear").hidden = !n;
   $("colourTarget").textContent = n ? `${n} selected` : "all";
@@ -158,6 +160,18 @@ const endDrag = () => { anchor = -1; dragBase = null; };
 $("seqTrack").addEventListener("pointerup", endDrag);
 $("seqTrack").addEventListener("pointercancel", endDrag);
 $("selClear").onclick = () => { sel.clear(); showSelection(); };
+
+// ---------- select by structure: every helix, strand or loop residue, then pick a colour ----------
+// A click replaces the selection, Shift adds to it; clicking a type that's fully selected drops it.
+const ofType = t => residues.flatMap((r, i) => r.ss === t ? [i] : []);
+const allOf = t => { const idx = ofType(t); return idx.length > 0 && idx.every(i => sel.has(i)); };
+$("pickSS").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b || b.disabled) return;
+  const t = b.dataset.v, idx = ofType(t);
+  if (allOf(t)) idx.forEach(i => sel.delete(i));
+  else { if (!e.shiftKey) sel.clear(); idx.forEach(i => sel.add(i)); }
+  showSelection();
+});
 window.addEventListener("keydown", e => { if (e.key === "Escape" && sel.size && $("gifDlg").hidden) { sel.clear(); showSelection(); } });
 
 // ---------- shape panel ----------
