@@ -79,7 +79,6 @@ function seg(id, fn) {
   $(id).addEventListener("click", e => { const b = e.target.closest("button"); if (!b || b.disabled) return; setSeg(id, b.dataset.v); });
 }
 seg("surface", v => view.set({ surface: v === "on" }));
-seg("text", v => view.set({ text: v }));
 seg("layout", v => view.set({ layout: v }));
 seg("theme", v => { document.body.classList.toggle("night", v === "night"); view.set({ theme: v }); renderLegend(); paintSequence(); });
 seg("detail", v => view.set({ detail: v }));
@@ -228,32 +227,9 @@ $("shapeReset").onclick = () => {
   setSeg("hStyle", "ribbon"); setSeg("arrows", "on");
 };
 
-// ---------- export ----------
-$("copy").onclick = async () => {
-  try { await navigator.clipboard.writeText(view.text()); $("copy").textContent = "Copied"; }
-  catch { $("copy").textContent = "Copy blocked"; }
-  setTimeout(() => $("copy").textContent = "Copy text", 1400);
-};
+// ---------- snapshot ----------
 $("png").onclick = () => { $("snap").querySelector("img").src = view.snapshot(); $("snap").hidden = false; };
 $("snap").onclick = e => { if (e.target === $("snap")) $("snap").hidden = true; };
-
-// ---------- share ----------
-function shareUrl() {
-  const base = location.href.split("#")[0];
-  return view.info && view.info.acc ? `${base}#${view.info.acc}` : base;
-}
-$("share").onclick = async () => {
-  const url = shareUrl(), title = `${view.info ? view.info.title : "Protein"} — ASCII Fold`;
-  try {
-    if (navigator.share && matchMedia("(pointer: coarse)").matches) { await navigator.share({ title, url }); return; }
-    await navigator.clipboard.writeText(url);
-    $("share").textContent = "Link copied";
-  } catch (e) {
-    if (e.name === "AbortError") return;
-    status(`Share link: <a href="${esc(url)}">${esc(url)}</a>`);
-  }
-  setTimeout(() => $("share").textContent = "Share", 1600);
-};
 
 // ---------- GIF export ----------
 // The GIF turns at the on-screen speed: the engine spins spin × 1.6 rad/s, so one turn takes 2π / (1.6 × spin) s.

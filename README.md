@@ -4,7 +4,7 @@ Spinning protein structures drawn as ASCII text that dissolves into a cartoon ri
 
 <p align="center"><img src="docs/demo.gif" alt="KRAS G12D rotating: ASCII characters on the left dissolve into a red, blue and gold cartoon ribbon on the right" width="560"></p>
 
-- **Text in 3D.** Glyphs are printed on the surface of the chain: they shrink and fade with distance, hide behind nearer parts, darken on the side away from the light and foreshorten as the surface turns away. The text takes the cartoon's shape: helices are twisting ribbons, strands are flat arrows and loops are thin tubes, so text and ribbon line up exactly where one turns into the other. The original flat character grid is one click away (Text → Flat), and a Perspective slider sets how strongly near parts loom.
+- **Text in 3D.** Glyphs are printed on the surface of the chain: they shrink and fade with distance, hide behind nearer parts, darken on the side away from the light and foreshorten as the surface turns away. The text takes the cartoon's shape: helices are twisting ribbons, strands are flat arrows and loops are thin tubes, so text and ribbon line up exactly where one turns into the other. A Perspective slider sets how strongly near parts loom.
 - **Text → ribbon blend.** One projection drives the text and a canvas cartoon, so they always line up. The handover is a fixed dither, like a halftone.
 - **Any AlphaFold DB model.** Load by accession, by URL hash (`#P04637`), or by dropping a `.pdb` / `.cif` file on the page. Colour by secondary structure, by pLDDT, or in one colour: a row of favourites plus ChimeraX's basic colours.
 - **Surface.** Show the molecular surface instead of the cartoon, built from every heavy atom at its van der Waals radius, as in ChimeraX. It's drawn as a smooth triangle mesh with WebGL and lit like ChimeraX's gentle lighting, with depth cueing only in the back half. The text is printed on the same surface. Files with only Cα atoms get a smoother residue-level surface.
@@ -12,7 +12,7 @@ Spinning protein structures drawn as ASCII text that dissolves into a cartoon ri
 - **Lighting.** One style throughout, after ChimeraX's `lighting gentle`: soft ambient light with ambient occlusion, so grooves and buried faces darken, plus a little key light and no highlights.
 - **Shape controls** (in the settings panel, under Glyphs and shape). Flatten strands and size their arrowheads. Draw helices as flat ribbons on a fitted ideal helix (2.2 Å wide and paper-thin by default) or as cylinders. Set thickness and width for helices, strands and loops.
 - **Zoom and detail.** Zoom adds characters instead of enlarging them (the 3D text re-samples in half-octave steps). The Detail setting picks the number of text rows, which also sets the 3D glyph size.
-- **Export.** Save seamless looping GIFs (one exact turn, up to 1080 px wide), PNG snapshots or the frame as plain text, and share a link to the protein on screen.
+- **Export.** Save seamless looping GIFs (one exact turn, up to 1080 px wide) or PNG snapshots. Links with a UniProt accession in the hash (`#P04637`) open that protein.
 - **Embeddable.** `<ascii-fold accession="P01116">` works on any page.
 
 ## Run it
@@ -55,12 +55,11 @@ AlphaFold DB sends CORS headers, so visitors' browsers fetch models directly and
 | `theme` | `paper` · `night` | `paper` |
 | `colour` | `ss` · `plddt`, or one colour: a ChimeraX basic colour name (`red`, `orange red`, `cornflower blue`, `light sea green`, `dim gray` …) or a hex value | `ss` |
 | `layout` | `lr` (text→ribbon) · `rl` · `ascii` · `ribbon` | `lr` |
-| `text` | `3d` (glyphs on the 3D surface) · `flat` (character grid) | `3d` |
-| `perspective` | 0–1; 0 is orthographic | `0.5` |
+| `perspective` | 0–1; 0 is orthographic | `1` |
 | `surface` | present: show the molecular surface instead of the cartoon | |
 | `glyphs` | `classic` · `blocks` · `geo`, or your own light→dark ramp | `classic` |
 | `detail` | `xcoarse` · `coarse` · `medium`, or a row count | `medium` |
-| `spin` | rotation speed, 0–1 | `0.35` (0 with reduced motion) |
+| `spin` | rotation speed, 0–1 | `0` (still) |
 | `blend-from`, `blend-to` | where the blend starts and ends, 0–1 (not in the app's panel) | `0.4`, `0.6` |
 | `helix-style` | `ribbon` · `cylinder` | `ribbon` |
 | `interactive` | `false` disables drag and zoom | |
@@ -79,12 +78,12 @@ import { createAsciiFold } from "./src/index.js";   // or the dist bundle
 const view = createAsciiFold(document.querySelector("#box"), { theme: "night", colour: "plddt" });
 await view.loadAccession("P42212");
 view.setShape({ hStyle: "cylinder", flat: 1 });
-view.set({ text: "flat", perspective: 0 });   // the original flat grid, no perspective
+view.set({ spin: 0.35, perspective: 0 });   // turning, no perspective
 view.set({ surface: true, colour: "cornflower blue" });
 view.setRotation(1.2, -0.3);
 const png = view.snapshot();       // data URL of the current frame
 const gif = await view.recordGif({ frames: 60, width: 720 });   // Blob: one seamless turn
-const txt = view.text();           // current frame as plain text
+const txt = view.text();           // the protein as plain ASCII text
 ```
 
 Other methods: `set(options)`, `loadFile(file)`, `loadText(text)`, `loadDefault()`, `zoomBy(f)`, `resetView()`, `palette()`, `residues()`, `residueColours()`, `colourResidues(indices, colour)`, `clearResidueColours()`, `on("load" | "zoom" | "colour", fn)` and `destroy()`. In the app, the view is available as `window.asciiFold`.
@@ -94,13 +93,12 @@ Other methods: `set(options)`, `loadFile(file)`, `loadText(text)`, `loadDefault(
 1. **Parse.** Read Cα and carbonyl O of the first chain from PDB or mmCIF. `src/parse.js` does this with no dependencies.
 2. **Secondary structure.** Use HELIX/SHEET records when present. Otherwise assign it from Cα distances alone (`src/ss.js`, P-SEA-like). This agreed with deposited assignments on about 80–86% of residues in our checks, which is fine for drawing but not for analysis.
 3. **Geometry.** Draw a Catmull-Rom spline through Cα. Orient the ribbon using the backbone C=O directions. Smooth the strand pleats on request, and fit helix axes for cylinders (`src/geometry.js`).
-4. **Text.** Splat spheres along the spline into a z-buffered cell grid, shade them with a simple light and depth cue, and map brightness to a glyph ramp. That grid is the flat text.
-   In 3D mode, glyphs sit on the cartoon's own surfaces instead: rows across both faces and the edges of helix and strand bands, and rings around loop tubes, using the same widths as the ribbon. Each frame they are rotated with the model and dropped when they face away. The rest are splatted into a depth buffer, and any glyph with a nearer surface in front is dropped too. The survivors are sized by perspective, fogged by depth, laid into the surface's tangent plane and drawn back to front from a pre-rendered glyph atlas. A small paper disc under each glyph hides ink further back.
+4. **Text.** Glyphs sit on the cartoon's own surfaces: rows across both faces and the edges of helix and strand bands, and rings around loop tubes, using the same widths as the ribbon. Each frame they are rotated with the model and dropped when they face away. The rest are splatted into a depth buffer, and any glyph with a nearer surface in front is dropped too. The survivors are sized by perspective, fogged by depth, laid into the surface's tangent plane and drawn back to front from a pre-rendered glyph atlas. A small paper disc under each glyph hides ink further back. Copy text is separate: it splats spheres along the chain into a z-buffered cell grid and maps each cell's light and depth to a glyph ramp.
 5. **Ribbon.** Draw the cartoon with a painter's algorithm on a 2D canvas, in the same (perspective) projection as the text. Helices and strands are flat strips, each segment in one shade. Each helix of 4+ residues is drawn along an ideal helix: constant radius and twist around the fitted axis, with its phase and twist least-squares fitted to the real Cα (0.3–0.8 Å RMSD on KRAS). It eases back onto the path through the real Cα over the last residue and a half, so loops join smoothly. The picture is smoother than the data, on purpose.
    **Surface.** A blobby isosurface (`src/surface.js`): each heavy atom adds exp(−B·(d²/r² − 1)) to a field, with r its Bondi van der Waals radius, and the surface is where the field is 1. A lone atom is a sphere of its radius, and neighbours merge smoothly, filling crevices much as a solvent probe does. The field is sampled on a grid (0.55 Å, coarser for big proteins) and triangulated with surface nets, with normals and residues taken from the atoms. `src/glsurface.js` draws the mesh with WebGL in the same projection as everything else, then the frame is composited with the ribbon canvas. The 3D text sits on evenly spaced mesh vertices. Without side chains, the same method runs on one soft 3.4 Å ball per residue.
    **Lighting.** On the surface, ambient occlusion is the share of 40 directions over each vertex's hemisphere that escape the protein within about 11 Å (like ChimeraX's multishadow). On the cartoon and its text, it's the Cα density just outside each point. Either way it's mixed with a little key light and no highlights.
    **Depth cue.** As in ChimeraX, the front half of the model is untouched and the back half fades toward the background.
-6. **Blend.** A fixed random mask hands each character cell (flat text) or each glyph (3D text) to either the text or the ribbon according to its horizontal position. Under 3D text the ribbon fades in rather than being masked cell by cell.
+6. **Blend.** A fixed random mask hands each glyph to either the text or the model according to its horizontal position, and the model fades in under the text.
 
 `scripts/bundle_pdb.py` packs one chain of a PDB file (all heavy atoms plus HELIX/SHEET) into the compact module used for the bundled structure.
 

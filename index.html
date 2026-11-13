@@ -51,7 +51,6 @@
     <section>
       <h3>Show</h3>
       <div class="seg" id="surface"><button data-v="off" class="on">Cartoon</button><button data-v="on">Surface</button></div>
-      <div class="seg" id="text"><button data-v="3d" class="on">3D text</button><button data-v="flat">Flat text</button></div>
       <div class="seg grid2" id="layout"><button data-v="lr" class="on">Text → model</button><button data-v="rl">Model → text</button><button data-v="ascii">Text only</button><button data-v="ribbon">Model only</button></div>
     </section>
 
@@ -68,8 +67,8 @@
       <h3>Look</h3>
       <div class="seg" id="theme"><button data-v="paper" class="on">Paper</button><button data-v="night">Night</button></div>
       <div class="seg" id="detail"><button data-v="xcoarse">X-coarse</button><button data-v="coarse">Coarse</button><button data-v="medium" class="on">Medium</button></div>
-      <label class="slider"><span>Spin</span><input id="speed" type="range" min="0" max="100" value="35"></label>
-      <label class="slider"><span>Perspective</span><input id="persp" type="range" min="0" max="100" value="50"></label>
+      <label class="slider"><span>Spin</span><input id="speed" type="range" min="0" max="100" value="0"></label>
+      <label class="slider"><span>Perspective</span><input id="persp" type="range" min="0" max="100" value="100"></label>
     </section>
 
     <details id="more">
@@ -93,8 +92,6 @@
     <section class="actions">
       <button class="btn" type="button" id="png">Snapshot</button>
       <button class="btn" type="button" id="gifBtn">GIF</button>
-      <button class="btn alt" type="button" id="copy">Copy text</button>
-      <button class="btn alt" type="button" id="share">Share</button>
     </section>
   </aside>
 </div>

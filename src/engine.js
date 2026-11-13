@@ -11,10 +11,9 @@ import { createSurfaceGL } from "./glsurface.js";
 // createAsciiFold(container, options) → view
 //
 // Renders a protein as spinning ASCII text that dissolves into a cartoon ribbon. The view
-// fills `container` and follows its size. The ribbon is drawn on a <canvas>. The text is
-// either a flat character grid in a <pre> ("flat") or glyphs placed on the 3D surface of
-// the chain and drawn on a second canvas ("3d"). All layers share one projection, so they
-// always line up.
+// fills `container` and follows its size. The cartoon (or surface) is drawn on one canvas and
+// the text, glyphs placed on the model's 3D surfaces, on a second canvas laid over it; both share
+// one projection, so they always line up.
 // ---------------------------------------------------------------------------------------
 
 export const PALETTES = {
@@ -50,8 +49,8 @@ export function solidColour(v) {
 export const DETAIL = { xcoarse: 32, coarse: 46, medium: 64 };   // text rows; columns follow width
 export const DEFAULTS = {
   theme: "paper", colour: "ss", layout: "lr", glyphs: "classic", detail: "medium",
-  text: "3d", perspective: 0.5, surface: false,
-  spin: 0.35, blendFrom: 0.4, blendTo: 0.6, interactive: true, background: true, palette: null,
+  perspective: 1, surface: false,
+  spin: 0, blendFrom: 0.4, blendTo: 0.6, interactive: true, background: true, palette: null,
   font: '"JetBrains Mono", "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace',
 };
 
@@ -98,13 +97,10 @@ export function createAsciiFold(container, options = {}) {
   const txt = document.createElement("canvas");
   txt.style.cssText = "position:absolute;left:0;top:0;pointer-events:none;";
   txt.setAttribute("aria-hidden", "true");
-  const out = document.createElement("pre");
-  out.style.cssText = "margin:0;white-space:pre;line-height:1;font-weight:700;position:relative;";
-  out.setAttribute("aria-hidden", "true");
   const probe = document.createElement("span");
   probe.textContent = "MMMMMMMMMM";
   probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;line-height:1;font-weight:700;left:-9999px;top:0;";
-  inner.append(rib, txt, out);
+  inner.append(rib, txt);
   root.append(inner, probe);
   container.append(root);
   root.setAttribute("role", "img");
@@ -116,12 +112,12 @@ export function createAsciiFold(container, options = {}) {
   let G = null, lastParsed = null, info = null;
   let COLS = 112, ROWS = 64, cw = 8, lh = 13, aspect = 0.6;
   let rotY = 0.6, rotX = -0.35, zoom = 1, panX = 0, panY = 0;
-  let mimg, HASH, zbuf, lbuf, cbuf, ibuf, fcol, dbuf, lastGrid = [];
+  let mimg, HASH, zbuf, lbuf, cbuf, fcol, dbuf, lastGrid = [];
   let PAL = null, SOLID = null, ramp = GLYPHS.classic;
-  let geomId = 0, txtDirty = false, fontEpoch = 0, lastSplat = [], surfBalls = null;
+  let geomId = 0, txtDirty = false, fontEpoch = 0, surfBalls = null;
   const ovr = new Map();   // residue index → colour ("ss", "plddt", or css) set from the sequence
   let ovrVer = 0, ctab = null;
-  const is3D = () => o.text !== "flat" && o.layout !== "ribbon";
+  const is3D = () => o.layout !== "ribbon";   // is any text shown
 
   function alloc() {
     mask.width = COLS; mask.height = ROWS;
@@ -129,7 +125,7 @@ export function createAsciiFold(container, options = {}) {
     const n = COLS * ROWS;
     HASH = new Float32Array(n);
     for (let i = 0; i < n; i++) { const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453; HASH[i] = x - Math.floor(x); }
-    zbuf = new Float32Array(n); lbuf = new Float32Array(n); cbuf = new Float32Array(n); ibuf = new Int32Array(n);
+    zbuf = new Float32Array(n); lbuf = new Float32Array(n); cbuf = new Float32Array(n);
     fcol = new Float32Array(COLS); dbuf = new Float32Array(n * DS * DS);
   }
 
@@ -138,8 +134,7 @@ export function createAsciiFold(container, options = {}) {
     PAL = { paper: hex(p.bg), ink: hex(p.ink), H: hex(p.H), E: hex(p.E), C: hex(p.C), P: p.P.map(hex), css: p };
     const sc = o.colour === "ss" || o.colour === "plddt" ? null : solidColour(o.colour);
     SOLID = sc ? { css: sc, rgb: hex(sc) } : null;
-    out.style.color = p.ink;
-    out.style.fontFamily = probe.style.fontFamily = o.font;
+    probe.style.fontFamily = o.font;
     root.style.background = o.background ? p.bg : "transparent";
     ramp = GLYPHS[o.glyphs] || (typeof o.glyphs === "string" && o.glyphs.length > 2 ? o.glyphs : GLYPHS.classic);
     root.style.cursor = o.interactive ? "grab" : "default";
@@ -156,9 +151,8 @@ export function createAsciiFold(container, options = {}) {
     cw = probe.getBoundingClientRect().width / 10 || fs * ratio; lh = fs; aspect = cw / lh;
     const cols = Math.max(16, Math.floor(W / cw));
     if (cols !== COLS || rows !== ROWS || !HASH) { COLS = cols; ROWS = rows; alloc(); }
-    out.style.fontSize = fs + "px";
     const dpr = window.devicePixelRatio || 1;
-    // size the box explicitly: in 3D mode the <pre> is empty and can't size it
+    // the text and model canvases set the box size
     inner.style.width = rib.style.width = txt.style.width = COLS * cw + "px";
     inner.style.height = rib.style.height = txt.style.height = ROWS * lh + "px";
     rib.width = txt.width = Math.round(COLS * cw * dpr); rib.height = txt.height = Math.round(ROWS * lh * dpr);
@@ -190,7 +184,6 @@ export function createAsciiFold(container, options = {}) {
     }
     return ctab = { key, list, rc };
   }
-  const textColour = q => { const t = colours(); return t.list[t.rc[q.res]].css; };
   const baseOf = q => { const t = colours(); return t.list[t.rc[q.res]].rgb; };
 
   // ---------- view helpers ----------
@@ -211,7 +204,7 @@ export function createAsciiFold(container, options = {}) {
 
   // ---------- frame ----------
   let lastBox = null;   // protein extent in cells, for cropped exports
-  function render(dom = true, grid = false) {
+  function render(grid = false) {   // grid: also fill the character grid, for Copy text
     if (!G || !HASH) return;
     const pts = G.pts, R = fitR();
     const cy = Math.cos(rotY), sy = Math.sin(rotY), cx = Math.cos(rotX), sx = Math.sin(rotX);
@@ -229,12 +222,12 @@ export function createAsciiFold(container, options = {}) {
     const sh = (col, d, ao, cue, k = 1) => shadeCol(col, lit(d, ao) * k, cue, 0.2);
     const aoMid = k => (AO.C[k] + AO.C[k + 1]) / 2;
 
-    // flat text: splat spheres along the spline into a z-buffered character grid
+    // Copy text: splat spheres along the spline into a z-buffered character grid
     const space = is3D(), P = new Array(pts.length);
     for (let k = 0; k < pts.length; k++) P[k] = rot(pts[k].p);
-    if (!space || grid) zbuf.fill(-1e9);
-    const SL = splatList(); lastSplat = SL;    // spline points, or one ball per residue for the surface
-    for (let k = 0; k < SL.length && (!space || grid); k++) {
+    if (grid) zbuf.fill(-1e9);
+    const SL = splatList();    // spline points, or atoms / residue balls for the surface
+    for (let k = 0; k < SL.length && grid; k++) {
       const q = SL[k], v = SL === pts ? P[k] : rot(q.p), r = q.r;
       const sc = scl(v[2]), px = ox + (v[0] * sc + panX) * S, py = oy - (v[1] * sc + panY) * S * aspect, rx = r * S * sc, ry = rx * aspect;
       const i0 = Math.max(0, Math.floor(px - rx)), i1 = Math.min(COLS - 1, Math.ceil(px + rx));
@@ -250,7 +243,6 @@ export function createAsciiFold(container, options = {}) {
           const diff = Math.max(0, dx * LIGHT[0] - dy * LIGHT[1] + nz * LIGHT[2]);
           lbuf[c] = lit(diff, SL === pts ? AO.C[k] : AO.Res[q.res]);
           cbuf[c] = Math.max(0, Math.min(1, 0.55 + 0.45 * (zf + R) / (2 * R)));
-          ibuf[c] = k;
         }
       }
     }
@@ -262,8 +254,6 @@ export function createAsciiFold(container, options = {}) {
       const f = fcol[i];
       md[c * 4 + 3] = space ? Math.round(Math.min(1, (1 - f) * 2) * 255) : HASH[c] < f * 1.04 && f > 0.001 ? 0 : 255;
     }
-    if (!space) buildChars(dom);
-    else { lastGrid = []; if (dom && out.firstChild) out.textContent = ""; }
 
     // ribbon: painter's algorithm in the same projection
     const dpr = rib.width / (COLS * cw);
@@ -350,32 +340,25 @@ export function createAsciiFold(container, options = {}) {
     else if (txtDirty) { tctx.setTransform(1, 0, 0, 1, 0, 0); tctx.clearRect(0, 0, txt.width, txt.height); txtDirty = false; }
   }
 
-  // ---------- flat text: characters read off the z-buffered grid ----------
-  function buildChars(dom) {
-    const night = o.theme === "night", n = ramp.length - 1, html = [], grid = [], useCol = dom;
+  // ---------- Copy text: the whole protein as plain characters ----------
+  // Spheres along the chain are splatted into the cell grid (render(true)); each covered cell gets a
+  // glyph from the ramp by its light and depth, the layout's text/model split aside.
+  function buildChars() {
+    const night = o.theme === "night", n = ramp.length - 1, rows = [];
     for (let j = 0; j < ROWS; j++) {
-      let line = "", row = "", runCol = null, run = "";
+      let line = "";
       for (let i = 0; i < COLS; i++) {
-        const c = j * COLS + i, f = fcol[i];
-        let ch = " ", col = null;
-        if (zbuf[c] > -1e8 && HASH[c] < f * 1.04 && f > 0.001) {
-          const light = lbuf[c], cue = cbuf[c];
-          let v = night ? light * cue : (0.42 + 0.58 * (1 - light)) * (0.25 + 0.75 * cue) * 1.1;
-          v = Math.min(1, v) * (0.45 + 0.55 * f);
-          ch = ramp[Math.max(1, Math.min(n, Math.round(v * n)))];
-          col = useCol ? textColour(lastSplat[ibuf[c]]) : null;
-        }
-        line += ch;
-        if (useCol) {
-          if (col !== runCol) { if (run) row += runCol ? `<span style="color:${runCol}">${run}</span>` : run; run = ""; runCol = col; }
-          run += ch;
-        }
+        const c = j * COLS + i;
+        if (zbuf[c] <= -1e8) { line += " "; continue; }
+        const light = lbuf[c], cue = cbuf[c];
+        const v = night ? light * cue : (0.42 + 0.58 * (1 - light)) * (0.25 + 0.75 * cue) * 1.1;
+        line += ramp[Math.max(1, Math.min(n, Math.round(Math.min(1, v) * n)))];
       }
-      if (useCol) { row += runCol ? `<span style="color:${runCol}">${run}</span>` : run; html.push(row); }
-      grid.push(line);
+      rows.push(line.replace(/\s+$/, ""));
     }
-    lastGrid = grid;
-    if (dom) { if (useCol) out.innerHTML = html.join("\n"); else out.textContent = grid.join("\n"); }
+    while (rows.length && !rows[0]) rows.shift();
+    while (rows.length && !rows[rows.length - 1]) rows.pop();
+    lastGrid = rows;
   }
 
   // ---------- ambient occlusion ----------
@@ -409,7 +392,7 @@ export function createAsciiFold(container, options = {}) {
     const lo = all[Math.floor(all.length * 0.1)], hi = Math.max(lo + 1e-3, all[Math.floor(all.length * 0.9)]);
     const map = d => AO_MIN + (1 - AO_MIN) * Math.max(0, Math.min(1, 1 - (d - lo) / (hi - lo)));
     for (const arr of [C, Pf, M]) for (let k = 0; k < np; k++) arr[k] = map(arr[k]);
-    const Res = Float32Array.from(G.ca, p => map(dens(p[0], p[1], p[2])));   // per residue, for the surface's flat text
+    const Res = Float32Array.from(G.ca, p => map(dens(p[0], p[1], p[2])));   // per residue, for Copy text over the surface
     return aoState = { id: geomId, dens, map, C, P: Pf, M, Res };
   }
   function surfaceAO(sf) {   // per glyph: on the surface, the mesh's own ambient occlusion
@@ -458,7 +441,7 @@ export function createAsciiFold(container, options = {}) {
     return +step.toPrecision(3);
   }
 
-  // flat text over the surface splats one ball per residue instead of the spline
+  // Copy text over the surface splats atoms (or residue balls) instead of the spline
   function splatList() {
     if (!o.surface) return G.pts;
     if (!surfBalls || surfBalls.id !== geomId) {
@@ -681,7 +664,7 @@ export function createAsciiFold(container, options = {}) {
       // covered? Allow for the surface's own tilt across one splat radius.
       const slope = Math.min(4, Math.sqrt(Math.max(0, 1 - wz * wz)) / Math.max(0.2, wz));
       if (dbuf[Math.floor(Y / uy) * DW + Math.floor(X / ux)] > vz + 0.15 + slope * 0.6 * spA) continue;
-      // light → glyph (as in the flat text), depth → fog step
+      // light → glyph, depth → fog step
       const diff = Math.max(0, wx * LIGHT[0] + wy * LIGHT[1] + wz * LIGHT[2]);
       const light = lit(diff, sf.ao[i]);
       const dt = Math.max(0, Math.min(1, (vz + R) / (2 * R))), cue = 0.55 + 0.45 * dt;
@@ -802,21 +785,7 @@ export function createAsciiFold(container, options = {}) {
     ctx.fillStyle = PAL.css.bg; ctx.fillRect(0, 0, box.w + pad * 2, box.h + pad * 2);
     const dpr = rib.width / (COLS * cw);
     ctx.drawImage(rib, box.i0 * cw * dpr, box.j0 * lh * dpr, box.w * dpr, box.h * dpr, pad, pad, box.w, box.h);
-    if (is3D()) {
-      ctx.drawImage(txt, box.i0 * cw * dpr, box.j0 * lh * dpr, box.w * dpr, box.h * dpr, pad, pad, box.w, box.h);
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      return;
-    }
-    const cs = getComputedStyle(out);
-    ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`; ctx.textBaseline = "top";
-    for (let j = box.j0; j < box.j1; j++) {
-      const line = lastGrid[j]; if (!line) continue;
-      for (let i = box.i0; i < box.i1; i++) {
-        const ch = line[i]; if (!ch || ch === " ") continue;
-        ctx.fillStyle = (G && textColour(lastSplat[ibuf[j * COLS + i]])) || PAL.css.ink;
-        ctx.fillText(ch, pad + (i - box.i0) * cw, pad + (j - box.j0) * lh);
-      }
-    }
+    ctx.drawImage(txt, box.i0 * cw * dpr, box.j0 * lh * dpr, box.w * dpr, box.h * dpr, pad, pad, box.w, box.h);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
 
@@ -886,7 +855,7 @@ export function createAsciiFold(container, options = {}) {
     resetView() { resetView(); kick(); return api; },
     /** Current frame as plain text (the flat character grid, also in 3D mode). */
     text() {
-      if (G && HASH) { if (is3D()) { render(false, true); buildChars(false); } else if (!lastGrid.length) render(false); }
+      if (G && HASH) { render(true); buildChars(); }
       return lastGrid.join("\n");
     },
     /** Current frame (ribbon + text) as a PNG data URL. crop: trim to the protein. */
@@ -907,12 +876,12 @@ export function createAsciiFold(container, options = {}) {
       capturing = true;
       const y0 = rotY, x0 = rotX, tick = () => new Promise(r => setTimeout(r, 0));
       try {
-        render(false);
+        render();
         const box = cropBox(crop), scale = width / (box.w + pad * 2);
         const W = Math.round(width), H = Math.round((box.h + pad * 2) * scale);
         const c = document.createElement("canvas"); c.width = W; c.height = H;
         const ctx = c.getContext("2d", { willReadFrequently: true });
-        const frameAt = i => { rotY = y0 + (2 * Math.PI * i) / frames; rotX = x0; render(true); composeFrame(ctx, box, scale, pad); return ctx.getImageData(0, 0, W, H).data; };
+        const frameAt = i => { rotY = y0 + (2 * Math.PI * i) / frames; rotX = x0; render(); composeFrame(ctx, box, scale, pad); return ctx.getImageData(0, 0, W, H).data; };
         // one shared palette from a few spread-out frames keeps colours from flickering
         const picks = [0, 0.25, 0.5, 0.75].map(f => Math.floor(f * frames));
         const sample = new Uint8ClampedArray(W * H * 4 * picks.length);

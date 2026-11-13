@@ -7,11 +7,11 @@ import { createAsciiFold } from "./engine.js";
 //   src           URL of a .pdb / .cif file to load instead (must be CORS-readable)
 //   theme         paper | night                      colour      ss | plddt | a ChimeraX colour name or hex
 //   layout        lr | rl | ascii | ribbon
-//   text          3d | flat                          perspective 0–1 (default 0.5; 0 = orthographic)
+//   perspective   0–1 (default 1; 0 = orthographic)
 //   surface       show the molecular surface instead of the cartoon (attribute present = on)
 //   glyphs        classic | blocks | geo | <custom ramp, light → dark>
 //   detail        xcoarse | coarse | medium | <rows>
-//   spin          rotation speed, 0–1 (default 0.35; 0 if the visitor prefers reduced motion)
+//   spin          rotation speed, 0–1 (default 0: still)
 //   blend-from / blend-to   where the text→ribbon blend starts/ends, 0–1
 //   helix-style   ribbon | cylinder
 //   interactive   "false" disables drag / zoom
@@ -24,7 +24,6 @@ import { createAsciiFold } from "./engine.js";
 const OPTION_ATTRS = {
   theme: v => ({ theme: v }), colour: v => ({ colour: v }), color: v => ({ colour: v }), layout: v => ({ layout: v }),
   glyphs: v => ({ glyphs: v }),
-  text: v => ({ text: v === "flat" ? "flat" : "3d" }),
   surface: v => ({ surface: v !== null && v !== "false" }),
   perspective: v => ({ perspective: Math.max(0, Math.min(1, parseFloat(v) || 0)) }),
   detail: v => ({ detail: /^\d+$/.test(v) ? +v : v }),
