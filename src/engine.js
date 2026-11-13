@@ -53,7 +53,7 @@ export function solidColour(v) {
 }
 export const DETAIL = { xcoarse: 32, coarse: 46, medium: 64 };   // text rows; columns follow width
 export const DEFAULTS = {
-  theme: "paper", colour: "ss", layout: "lr", glyphs: "classic", detail: "medium",
+  theme: "paper", colour: "ss", layout: "lr", glyphs: "geo", detail: "medium",
   perspective: 1, surface: false, glass: false, glassOpacity: 0.3, depth: 0.6, faces: false, sidechains: "none", ligands: true,
   spin: 0, motion: "turn", blendFrom: 0.4, blendTo: 0.6, interactive: true, background: true, palette: null,
   font: '"JetBrains Mono", "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace',

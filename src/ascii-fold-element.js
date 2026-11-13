@@ -16,7 +16,7 @@ import { createAsciiFold } from "./engine.js";
 //   chains        which protein chains to draw, e.g. "A,B" (default: all)
 //   surface       show the molecular surface instead of the cartoon (attribute present = on);
 //                 "both": a see-through surface over the cartoon, as opaque as glass-opacity (0–1, default 0.3)
-//   glyphs        classic | blocks | geo | <custom ramp, light → dark>
+//   glyphs        geo (default) | classic | blocks | <custom ramp, light → dark>
 //   detail        xcoarse | coarse | medium | <rows>
 //   spin          rotation speed, 0–1 (default 0: still)
 //   motion        turn | rock (swing ±30°)
