@@ -56,6 +56,7 @@ seg("surface", v => view.set({ surface: v === "on" }));
 let scMode = "off";
 const syncSideChains = () => view.showSideChains(scMode === "all" ? "all" : scMode === "sel" ? [...sel] : null);
 seg("sidechains", v => { scMode = v; syncSideChains(); });
+seg("ligands", v => view.set({ ligands: v === "on" }));
 seg("layout", v => view.set({ layout: v }));
 seg("theme", v => { document.body.classList.toggle("night", v === "night"); view.set({ theme: v }); renderLegend(); paintSequence(); });
 seg("detail", v => view.set({ detail: v }));
@@ -83,9 +84,13 @@ $("moreCol").onclick = () => {
   $("moreCol").textContent = open ? "Fewer colours" : "More colours";
   $("moreCol").setAttribute("aria-expanded", String(open));
 };
-let custom = false;   // some residues carry their own colour
+let custom = false;   // some residues or ligands carry their own colour
 function applyColour(v) {
-  if (sel.size) { view.colourResidues([...sel], v); custom = true; }
+  if (sel.size || lsel.size) {
+    if (sel.size) view.colourResidues([...sel], v);
+    if (lsel.size) view.colourLigands([...lsel], v);   // Structure or pLDDT gives a ligand back its own colour
+    custom = true;
+  }
   else { view.clearResidueColours(); custom = false; view.set({ colour: v }); markColour(v); }
   $("colReset").hidden = !custom;
   renderLegend(); paintSequence();
@@ -104,11 +109,12 @@ function renderLegend() {
 $("colReset").onclick = () => { view.clearResidueColours(); custom = false; $("colReset").hidden = true; renderLegend(); paintSequence(); };
 
 // ---------- sequence panel: drag or click to select residues, then pick a colour ----------
+// Ligands sit in a row of chips below the sequence; they select (and recolour) the same way.
 const RW = 11;   // px per residue, as --rw in app.css
-const sel = new Set();
-let residues = [], anchor = -1, dragBase = null;
+const sel = new Set(), lsel = new Set();   // selected residues, selected ligands
+let residues = [], ligands = [], anchor = -1, dragBase = null;
 function buildSequence() {
-  residues = view.residues(); sel.clear(); custom = false; $("colReset").hidden = true;
+  residues = view.residues(); ligands = view.ligands(); sel.clear(); lsel.clear(); custom = false; $("colReset").hidden = true;
   const n = residues.length, runs = [];
   for (let i = 0; i < n;) {
     let j = i; while (j + 1 < n && residues[j + 1].ss === residues[i].ss) j++;
@@ -121,11 +127,16 @@ function buildSequence() {
   $("seqTrack").style.width = n * RW + "px";
   $("seqTrack").innerHTML = `<div class="sse" style="width:${n * RW}px">${sse}</div><div class="aa">${aa}</div><div class="num">${nums}</div>`;
   for (const b of $("pickSS").querySelectorAll("button")) b.disabled = !residues.some(r => r.ss === b.dataset.v);
+  $("ligRow").hidden = !ligands.length;
+  $("ligRow").innerHTML = ligands.map(l => `<button type="button" data-l="${l.i}" title="${esc(l.name)} ${l.num}, chain ${esc(l.chain)}${l.ion ? " (ion)" : `, ${l.atoms} atoms`}"><i></i>${esc(l.name)}<small>${l.num}</small></button>`).join("");
+  $("ligands").querySelectorAll("button").forEach(b => { b.disabled = !ligands.length; });
+  $("ligands").title = ligands.length ? "Ligands and ions as sticks and balls, with the cartoon or the surface" : "No ligands in this structure";
   paintSequence(); showSelection(); renderLegend();
 }
-function paintSequence() {   // each letter in its residue's current colour
-  const cols = view.residueColours();
+function paintSequence() {   // each letter in its residue's current colour, each ligand chip's dot in the ligand's
+  const cols = view.residueColours(), lcols = view.ligandColours();
   $("seqTrack").querySelectorAll(".aa i").forEach((c, i) => { c.style.color = cols[i]; });
+  $("ligRow").querySelectorAll("button").forEach((b, i) => { b.style.setProperty("--c", lcols[i]); });
 }
 function ranges() {          // the selection as residue-number ranges: "12–30, 45"
   const idx = [...sel].sort((a, b) => a - b), out = [];
@@ -138,18 +149,19 @@ function ranges() {          // the selection as residue-number ranges: "12–30
 }
 function showSelection() {
   $("seqTrack").querySelectorAll(".aa i").forEach((c, i) => c.classList.toggle("sel", sel.has(i)));
+  $("ligRow").querySelectorAll("button").forEach((b, i) => b.classList.toggle("sel", lsel.has(i)));
   for (const b of $("pickSS").querySelectorAll("button")) b.classList.toggle("on", allOf(b.dataset.v));
-  const n = sel.size;
+  const n = sel.size + lsel.size, names = [...lsel].sort((a, b) => a - b).map(i => esc(ligands[i].name));
   $("selClear").hidden = !n;
   $("colourTarget").textContent = n ? `${n} selected` : "all";
   $("colourTarget").classList.toggle("sel", n > 0);
-  $("selInfo").innerHTML = n ? `<b>${n}</b> selected (${ranges()})` : "";
+  $("selInfo").innerHTML = n ? `<b>${n}</b> selected (${[sel.size ? ranges() : "", ...names].filter(Boolean).join(", ")})` : "";
   if (scMode === "sel") syncSideChains();
 }
 const indexAt = e => { const r = $("seqTrack").getBoundingClientRect(); return Math.max(0, Math.min(residues.length - 1, Math.floor((e.clientX - r.left) / RW))); };
 $("seqTrack").addEventListener("pointerdown", e => {
   if (!residues.length || e.button !== 0) return;
-  if (!(e.shiftKey || e.metaKey || e.ctrlKey)) sel.clear();
+  if (!(e.shiftKey || e.metaKey || e.ctrlKey)) { sel.clear(); lsel.clear(); }
   const bar = e.target.closest(".sse b");
   if (bar) { for (let i = +bar.dataset.a; i <= +bar.dataset.b; i++) sel.add(i); showSelection(); return; }
   anchor = indexAt(e); dragBase = new Set(sel); sel.add(anchor);
@@ -166,7 +178,15 @@ $("seqTrack").addEventListener("pointermove", e => {
 const endDrag = () => { anchor = -1; dragBase = null; };
 $("seqTrack").addEventListener("pointerup", endDrag);
 $("seqTrack").addEventListener("pointercancel", endDrag);
-$("selClear").onclick = () => { sel.clear(); showSelection(); };
+$("selClear").onclick = () => { sel.clear(); lsel.clear(); showSelection(); };
+// a ligand chip: click selects it alone, Shift (or ⌘ / Ctrl) adds or removes it
+$("ligRow").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  const i = +b.dataset.l, add = e.shiftKey || e.metaKey || e.ctrlKey;
+  if (add) { if (lsel.has(i)) lsel.delete(i); else lsel.add(i); }
+  else { const only = lsel.size === 1 && lsel.has(i) && !sel.size; sel.clear(); lsel.clear(); if (!only) lsel.add(i); }
+  showSelection();
+});
 
 // ---------- select by structure: every helix, strand or loop residue, then pick a colour ----------
 // A click replaces the selection, Shift adds to it; clicking a type that's fully selected drops it.
@@ -176,10 +196,10 @@ $("pickSS").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b || b.disabled) return;
   const t = b.dataset.v, idx = ofType(t);
   if (allOf(t)) idx.forEach(i => sel.delete(i));
-  else { if (!e.shiftKey) sel.clear(); idx.forEach(i => sel.add(i)); }
+  else { if (!e.shiftKey) { sel.clear(); lsel.clear(); } idx.forEach(i => sel.add(i)); }
   showSelection();
 });
-window.addEventListener("keydown", e => { if (e.key === "Escape" && sel.size && $("gifDlg").hidden) { sel.clear(); showSelection(); } });
+window.addEventListener("keydown", e => { if (e.key === "Escape" && (sel.size || lsel.size) && $("gifDlg").hidden) { sel.clear(); lsel.clear(); showSelection(); } });
 
 // ---------- shape panel ----------
 let rebuildQueued = null;

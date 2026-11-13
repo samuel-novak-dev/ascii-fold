@@ -45,6 +45,7 @@
       <h3>Show</h3>
       <div class="seg" id="surface"><button data-v="off" class="on">Cartoon</button><button data-v="on">Surface</button></div>
       <div class="seg" id="sidechains" title="Side chains as sticks, with the cartoon; Selected follows the sequence selection"><button data-v="off" class="on">No side chains</button><button data-v="sel">Selected</button><button data-v="all">All</button></div>
+      <div class="seg" id="ligands" title="Ligands and ions as sticks and balls, with the cartoon or the surface"><button data-v="on" class="on">Ligands</button><button data-v="off">No ligands</button></div>
       <div class="seg grid2" id="layout"><button data-v="lr" class="on">Text → model</button><button data-v="rl">Model → text</button><button data-v="ascii">Text only</button><button data-v="ribbon">Model only</button></div>
     </section>
 
@@ -100,6 +101,7 @@
     <button type="button" class="link" id="colReset" hidden>Reset colours</button>
   </div>
   <div class="seqscroll" id="seqScroll"><div class="seqtrack" id="seqTrack"></div></div>
+  <div class="ligs" id="ligRow" role="group" aria-label="Ligands" hidden></div>
 </section>
 
 <div id="gifDlg" class="dlg" hidden role="dialog" aria-modal="true" aria-labelledby="gifTitle">

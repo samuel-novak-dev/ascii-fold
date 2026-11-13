@@ -209,9 +209,13 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
   const anchor = new Array(N);
   for (const q of pts) if (q.t === 0) anchor[q.res] = q.p;
 
+  // ligands and ions, centred like the chain
+  const ligands = (parsed.ligands || []).map(l => ({ name: l.name, num: l.num, chain: l.chain, ion: l.atoms.length === 1,
+    P: l.atoms.map(a => sub(a.p, cen)), el: l.atoms.map(a => a.e), names: l.atoms.map(a => a.n) }));
+
   const plddts = rows.map(r => r.b || 0);
   // colour by B-factor ("pLDDT") whenever the file has varying B-factors; hasPlddt only labels them
   const hasPlddt = !!parsed.hasPlddt, hasB = !!parsed.bFactors || hasPlddt;
   const meanP = plddts.reduce((a, b) => a + b, 0) / N;
-  return { pts, R, hasPlddt, hasB, fromAFDB: !!parsed.fromAFDB, N, meanP, ca: CA0, helixRMSD, ssRes: SS, pkRes: PB, atoms, anchor, resName: rows.map(r => r.name || "UNK"), resNum: rows.map(r => r.num), ssCounts: { H: SS.filter(s => s === "H").length, E: SS.filter(s => s === "E").length }, ssAuto: !parsed.ss };
+  return { pts, R, hasPlddt, hasB, fromAFDB: !!parsed.fromAFDB, N, meanP, ca: CA0, helixRMSD, ssRes: SS, pkRes: PB, atoms, anchor, ligands, resName: rows.map(r => r.name || "UNK"), resNum: rows.map(r => r.num), ssCounts: { H: SS.filter(s => s === "H").length, E: SS.filter(s => s === "E").length }, ssAuto: !parsed.ss };
 }

@@ -106,6 +106,15 @@ input[type=range] { accent-color: var(--red); width: 100%; margin: 0; }
 .seqtrack .aa i.sel { background: var(--ink); color: var(--paper) !important; }
 .seqtrack .num { position: absolute; top: 35px; left: 0; height: 14px; font: 500 9.5px "JetBrains Mono", ui-monospace, monospace; color: var(--mute); }
 .seqtrack .num span { position: absolute; top: 0; white-space: nowrap; }
+.ligs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; }
+.ligs::before { content: "Ligands"; font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--mute); margin-right: 4px; }
+.ligs button { display: inline-flex; align-items: center; gap: 5px; font: 700 11px/18px "JetBrains Mono", ui-monospace, Menlo, monospace;
+  color: var(--ink); background: none; border: 1px solid color-mix(in srgb, var(--mute) 60%, transparent); border-radius: 10px; padding: 0 8px; cursor: pointer; }
+.ligs button i { width: 9px; height: 9px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 25%, transparent); }
+.ligs button small { font-weight: 500; color: var(--mute); }
+.ligs button:hover { border-color: var(--ink); }
+.ligs button.sel { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.ligs button.sel small { color: inherit; opacity: .7; }
 
 /* ---------- dialogs ---------- */
 .ctl { display: flex; align-items: center; gap: 8px; }

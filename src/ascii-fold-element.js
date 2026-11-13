@@ -11,6 +11,7 @@ import { createAsciiFold } from "./engine.js";
 //   depth         0–1, how much darker the back of the model gets (default 0.6)
 //   helix-faces   lighten helix turns facing the viewer, darken their insides (attribute present = on)
 //   sidechains    all | none: side chains as sticks with the cartoon
+//   ligands       off hides ligands and ions (shown by default)
 //   surface       show the molecular surface instead of the cartoon (attribute present = on)
 //   glyphs        classic | blocks | geo | <custom ramp, light → dark>
 //   detail        xcoarse | coarse | medium | <rows>
@@ -30,6 +31,7 @@ const OPTION_ATTRS = {
   perspective: v => ({ perspective: Math.max(0, Math.min(1, parseFloat(v) || 0)) }),
   depth: v => ({ depth: Math.max(0, Math.min(1, parseFloat(v) || 0)) }),
   sidechains: v => ({ sidechains: v === "all" ? "all" : "none" }),
+  ligands: v => ({ ligands: v !== "off" && v !== "false" && v !== "none" }),
   "helix-faces": v => ({ faces: v !== null && v !== "false" }),
   detail: v => ({ detail: /^\d+$/.test(v) ? +v : v }),
   spin: v => ({ spin: parseFloat(v) || 0 }),

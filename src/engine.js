@@ -7,7 +7,7 @@ import { GIFEncoder, quantize, applyPalette } from "./vendor/gifenc.js";
 import { surfaceMesh, meshAO, meshPoints, RES_BALL } from "./surface.js";
 import { createGLView } from "./glview.js";
 import { cartoonMesh } from "./cartoon.js";
-import { sideChainMesh, ELEMENT_RGB } from "./sticks.js";
+import { sideChainMesh, ligandMesh, ELEMENT_RGB, elementCss } from "./sticks.js";
 
 // ---------------------------------------------------------------------------------------
 // createAsciiFold(container, options) → view
@@ -51,12 +51,13 @@ export function solidColour(v) {
 export const DETAIL = { xcoarse: 32, coarse: 46, medium: 64 };   // text rows; columns follow width
 export const DEFAULTS = {
   theme: "paper", colour: "ss", layout: "lr", glyphs: "classic", detail: "medium",
-  perspective: 1, surface: false, depth: 0.6, faces: false, sidechains: "none",
+  perspective: 1, surface: false, depth: 0.6, faces: false, sidechains: "none", ligands: true,
   spin: 0, blendFrom: 0.4, blendTo: 0.6, interactive: true, background: true, palette: null,
   font: '"JetBrains Mono", "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace',
 };
 
 const MAX_CELLS = 70000, ZMIN = 0.4, ZMAX = 10;
+const LIGAND_CARBON = "#a9a9a9";   // a ligand's carbons, until recoloured ("dark gray"); an ion keeps its element's colour
 const PERSP = 0.45;          // perspective 1 puts the camera R / 0.45 from the centre
 const MAX_GLYPHS = 60000;    // 3D text: cap on surface glyphs, the spacing grows to fit
 const GLYPH_SPRITE = 1.25;   // 3D text: sprite size in text rows (the glyph em is 0.8 of the sprite, so one row)
@@ -518,6 +519,15 @@ export function createAsciiFold(container, options = {}) {
       stickState = { key, m: sideChainMesh(G, scShow === "all" ? () => true : r => scShow.has(r)), colKey: "" };
     return stickState.m.nv ? stickState.m : null;
   }
+  // ligands and ions: drawn with the cartoon and with the surface; each has a colour for its carbons
+  let ligState = null, ligVer = 0;
+  const ligOvr = new Map();   // ligand index → css
+  function ligMesh() {
+    if (!o.ligands || !G.ligands.length) return null;
+    if (!ligState || ligState.id !== geomId) ligState = { id: geomId, m: ligandMesh(G), colKey: "" };
+    return ligState.m.nv ? ligState.m : null;
+  }
+  const ligColours = () => G ? G.ligands.map((l, i) => ligOvr.get(i) || (l.ion ? elementCss(l.el[0]) : LIGAND_CARBON)) : [];
   function view3d() {
     if (glv === undefined) { try { glv = createGLView(); } catch { glv = null; } }
     return glv;
@@ -543,10 +553,20 @@ export function createAsciiFold(container, options = {}) {
       }
       names.push("sticks");
     }
+    const lm = ligMesh();
+    if (lm) {   // ligands: carbons (and ions) in the ligand's colour, the rest by element
+      if (v.mesh("ligands") !== lm) { v.setMesh("ligands", lm); ligState.colKey = ""; }
+      if (ligState.colKey !== ligVer) {
+        const lc = ligColours().map(hex), rgb = new Uint8Array(lm.nv * 3);
+        for (let i = 0; i < lm.nv; i++) { const c = ELEMENT_RGB[lm.el[i]] || lc[lm.res[i]]; rgb[i * 3] = c[0]; rgb[i * 3 + 1] = c[1]; rgb[i * 3 + 2] = c[2]; }
+        v.setColours("ligands", rgb); ligState.colKey = ligVer;
+      }
+      names.push("ligands");
+    }
     const M = F.Rm, cam = F.kz > 0 ? 1 / F.kz : 0;
     // the model's nearest and farthest distance from the camera in this view (every 3rd vertex is plenty)
     let dn = Infinity, df = -Infinity;
-    for (const mm of sm ? [m, sm] : [m]) {
+    for (const mm of [m, sm, lm].filter(Boolean)) {
       const P = mm.P;
       for (let i = 0; i < mm.nv; i += 3) {
         const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
@@ -821,10 +841,10 @@ export function createAsciiFold(container, options = {}) {
   let loadToken = 0, aborter = null;
   function setStructure(parsed, meta = {}) {
     G = buildGeometry(parsed, shape); geomId++;
-    ovr.clear(); ovrVer++;
+    ovr.clear(); ovrVer++; ligOvr.clear(); ligVer++;
     lastParsed = parsed;
     info = { title: meta.title || parsed.title || "Structure", sub: meta.sub || "", residues: G.N, meanPlddt: G.hasPlddt ? G.meanP : null, meanB: G.hasB ? G.meanP : null,
-             hasPlddt: G.hasPlddt, hasB: G.hasB, fromAFDB: G.fromAFDB || !!meta.entryUrl, ssFromGeometry: G.ssAuto, chain: parsed.chain, entryUrl: meta.entryUrl || null, acc: meta.acc || null };
+             hasPlddt: G.hasPlddt, hasB: G.hasB, ligands: G.ligands.length, fromAFDB: G.fromAFDB || !!meta.entryUrl, ssFromGeometry: G.ssAuto, chain: parsed.chain, entryUrl: meta.entryUrl || null, acc: meta.acc || null };
     root.setAttribute("aria-label", `${info.title}: rotating protein structure drawn as text and ribbon`);
     resetView(true);
     emit("load", info);
@@ -944,8 +964,19 @@ export function createAsciiFold(container, options = {}) {
     },
     /** Show side chains as sticks: "all", an array of residue indices, or null for none. */
     showSideChains(which) { setSideChains(which); kick(); return api; },
-    /** Drop all per-residue colours. */
-    clearResidueColours() { ovr.clear(); ovrVer++; kick(); emit("colour"); return api; },
+    /** Ligands and ions near the chain: [{ i, name, num, chain, ion, atoms }]. Shown unless set({ ligands: false }). */
+    ligands() { return G ? G.ligands.map((l, i) => ({ i, name: l.name, num: l.num, chain: l.chain, ion: l.ion, atoms: l.P.length })) : []; },
+    /** Each ligand's current colour (css): its carbons', or an ion's. */
+    ligandColours() { return ligColours(); },
+    /** Colour ligands (indices) with a colour name or hex; null (or "ss" / "plddt") returns them to their own colour. */
+    colourLigands(indices, colour) {
+      const c = colour == null || colour === "ss" || colour === "plddt" ? null : solidColour(colour);
+      if (colour != null && colour !== "ss" && colour !== "plddt" && !c) throw new Error(`Unknown colour: ${colour}`);
+      for (const i of indices) if (c === null) ligOvr.delete(i); else ligOvr.set(i, c);
+      ligVer++; kick(); emit("colour"); return api;
+    },
+    /** Drop all per-residue and per-ligand colours. */
+    clearResidueColours() { ovr.clear(); ovrVer++; ligOvr.clear(); ligVer++; kick(); emit("colour"); return api; },
     on(ev, fn) { (listeners[ev] = listeners[ev] || []).push(fn); return () => { listeners[ev] = listeners[ev].filter(f => f !== fn); }; },
     destroy() {
       destroyed = true;
