@@ -10,8 +10,8 @@ const BACKBONE = new Set(["N", "CA", "C", "O", "OXT"]);
 export const pbin = v => v > 90 ? 0 : v > 70 ? 1 : v > 50 ? 2 : 3;   // AlphaFold pLDDT bands
 
 // ---------- shape parameters (Å) ----------
-// helices follow ChimeraX's default cartoon: a 2.0 Å wide, 0.4 Å thick oval ribbon
-export const SHAPE_DEFAULT = { hStyle: "ribbon", hW: 1.0, hT: 0.2, cylR: 2.3, sW: 1.0, sT: 0.2, flat: 1.0, arrows: true, head: 2.3, coilR: 0.48 };
+// helices: a 2.2 Å wide, paper-thin oval ribbon; strands: flat 2 Å arrows
+export const SHAPE_DEFAULT = { hStyle: "ribbon", hW: 1.1, hT: 0.04, cylR: 2.3, sW: 1.0, sT: 0.2, flat: 1.0, arrows: true, head: 2.3, coilR: 0.48 };
 
 function helixAxis(CA, s, e) {
   // per-residue axis points for helix run s..e (4-residue weighted average cancels the 3.6-residue turn)
@@ -45,7 +45,8 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
   CA0 = CA0.map(p => sub(p, cen));
   const SS = parsed.ss || assignSS(CA0);
   const PB = rows.map(r => pbin(r.b || 0));
-  const SUB = Math.max(3, Math.min(10, Math.round(2600 / N)));
+  // spline samples per residue: a helix turns ~100° per residue, so fewer than ~6 shows as corners
+  const SUB = Math.max(6, Math.min(12, Math.round(4000 / N)));
 
   // flatten strands: smooth the pleated Cα zig-zag inside β runs
   let CA = CA0.map(p => p.slice());
@@ -58,12 +59,13 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
     CA = nx;
   }
 
-  // helix axes for cylinder mode
-  const AX = new Array(N).fill(null);
-  if (cyl) for (let i = 0; i < N;) {
+  // helix axes: the cylinders' path, and what keeps a helix ribbon's width parallel to its axis
+  const AX = new Array(N).fill(null), AD = new Array(N).fill(null);
+  for (let i = 0; i < N;) {
     if (SS[i] !== "H") { i++; continue; }
     let j = i; while (j + 1 < N && SS[j + 1] === "H") j++;
     helixAxis(CA, i, j).forEach((p, k) => AX[i + k] = p);
+    for (let k = i; k <= j; k++) AD[k] = norm(sub(AX[Math.min(j, k + 1)], AX[Math.max(i, k - 1)]));
     i = j + 1;
   }
 
@@ -82,6 +84,10 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
       : norm(add(add(mul(SIDE[i - 1], 0.25), mul(v, 0.5)), mul(SIDE[i + 1], 0.25))));
     for (let i = 0; i < N; i++) SIDE[i] = sm[i];
   }
+  // Helix ribbons, as in ChimeraX: width along the helix axis, so the band lies on the helix's
+  // cylinder and every turn is the same. (Carbonyl directions wobble residue to residue, which
+  // twisted the band at odd angles.)
+  for (let i = 0; i < N; i++) if (AD[i] && Math.hypot(...AD[i]) > 0.5) SIDE[i] = AD[i];
 
   const rH = cyl ? SH.cylR : 2.1 * SH.hW, rE = Math.max(1.0, SH.sW * 1.35);
   const radOf = ss => ss === "H" ? rH : ss === "E" ? rE : 0.95;
@@ -114,10 +120,13 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
     const T = norm(sub(b, a));
     const S = norm(sub(q.side, mul(T, dot(q.side, T))));
     q.side = S; q.nrm = norm(cross(T, S));
-    const i = q.res, t = q.t, own = SS[i], next = SS[Math.min(N - 1, i + 1)];
+    const i = q.res, t = q.t, own = SS[i], next = SS[Math.min(N - 1, i + 1)], prev = SS[Math.max(0, i - 1)];
     let w = 0, th = 0;
     if (q.cyl) { q.kind = "Hc"; q.wIn = q.wOut = 0; continue; }
-    if (own === "H" && !cyl) { w = next === "H" ? SH.hW : SH.hW * (1 - 0.7 * t); th = SH.hT; }
+    if (own === "H" && !cyl) {   // full width inside the helix, tapering over its first and last residue
+      w = SH.hW * (next === "H" ? 1 : 1 - 0.7 * t) * (prev === "H" || i === 0 ? 1 : 0.3 + 0.7 * t);
+      th = SH.hT;
+    }
     else if (own === "E") {
       th = SH.sT;
       if (next === "E") w = SH.sW;
