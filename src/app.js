@@ -1,4 +1,4 @@
-// The full-page app (index.html): wires the toolbar and panels to one engine view.
+// The full-page app (index.html): wires the settings panel and the sequence panel to one engine view.
 import { createAsciiFold, COLOURS } from "./engine.js";
 import { SHAPE_DEFAULT } from "./geometry.js";
 
@@ -22,7 +22,8 @@ view.on("load", info => {
   if (info.ssFromGeometry) bits.push("SS from Cα geometry");
   $("sub").textContent = bits.filter(Boolean).join(" · ");
   $("plddtBtn").disabled = !info.hasPlddt;
-  if (!info.hasPlddt && view.options.colour === "plddt") setSeg("colour", "ss");
+  if (!info.hasPlddt && view.options.colour === "plddt") { view.set({ colour: "ss" }); markColour("ss"); renderLegend(); }
+  buildSequence();
   $("credit").innerHTML = info.entryUrl
     ? `Structure: <a href="${info.entryUrl}" target="_blank" rel="noopener">AlphaFold DB</a> (CC BY 4.0)`
     : info.hasPlddt ? "Structure: AlphaFold DB (CC BY 4.0)" : "";
@@ -71,36 +72,123 @@ window.addEventListener("drop", e => {
 const handlers = {};
 function setSeg(id, v) {
   $(id).querySelectorAll("button").forEach(x => x.classList.toggle("on", x.dataset.v === v));
-  if (id === "colour") $("swatches").querySelectorAll("button").forEach(x => x.classList.toggle("on", x.dataset.v === v));
   handlers[id](v);
 }
 function seg(id, fn) {
   handlers[id] = fn;
   $(id).addEventListener("click", e => { const b = e.target.closest("button"); if (!b || b.disabled) return; setSeg(id, b.dataset.v); });
 }
-function renderLegend() {
-  const p = view.palette(), c = view.options.colour;
-  const solid = COLOURS.find(([n]) => n === c);
-  const items = c === "ss" ? [["Helix", p.H], ["Strand", p.E], ["Coil", p.C]]
-    : c === "plddt" ? [[">90", p.P[0]], ["70–90", p.P[1]], ["50–70", p.P[2]], ["<50", p.P[3]]] : solid ? [solid] : [];
-  $("legend").innerHTML = items.map(([t, col]) => `<span style="--sw:${col}">${t}</span>`).join("");
-}
-seg("layout", v => view.set({ layout: v }));
-seg("text", v => view.set({ text: v }));
-seg("lighting", v => view.set({ lighting: v }));
 seg("surface", v => view.set({ surface: v === "on" }));
-$("persp").oninput = e => view.set({ perspective: e.target.value / 100 });
-seg("seam", v => view.set({ seam: v }));
-seg("colour", v => { view.set({ colour: v }); renderLegend(); });
-// one-colour swatches, ChimeraX style; they share the colour control's handler and highlight
-$("swatches").innerHTML = COLOURS.map(([n, h]) => `<button type="button" data-v="${n}" title="${n}" aria-label="${n}" style="--c:${h}"></button>`).join("");
-$("swatches").addEventListener("click", e => { const b = e.target.closest("button"); if (b) setSeg("colour", b.dataset.v); });
-seg("theme", v => { document.body.classList.toggle("night", v === "night"); view.set({ theme: v }); renderLegend(); });
-seg("glyphs", v => view.set({ glyphs: v }));
+seg("text", v => view.set({ text: v }));
+seg("layout", v => view.set({ layout: v }));
+seg("lighting", v => view.set({ lighting: v }));
+seg("theme", v => { document.body.classList.toggle("night", v === "night"); view.set({ theme: v }); renderLegend(); paintSequence(); });
 seg("detail", v => view.set({ detail: v }));
+seg("glyphs", v => view.set({ glyphs: v }));
 $("speed").oninput = e => setSpin(+e.target.value);
-$("f0").oninput = e => view.set({ blendFrom: e.target.value / 100 });
-$("f1").oninput = e => view.set({ blendTo: e.target.value / 100 });
+$("persp").oninput = e => view.set({ perspective: e.target.value / 100 });
+
+// ---------- colour: the whole structure, or the residues selected in the sequence ----------
+// Favourite swatches up front, in groups; ChimeraX's basic colours behind "More colours".
+const FAVOURITES = [
+  [["dark gray", "#a9a9a9"], ["gray", "#808080"]],
+  [["cornflower blue", "#6495ed"], ["deep sky blue", "#00bfff"], ["light sky blue", "#87cefa"], ["steel blue", "#4682b4"]],
+  [["light sea green", "#20b2aa"], ["cadet blue", "#5f9ea0"], ["dark cyan", "#008b8b"]],
+  [["tomato", "#ff6347"], ["coral", "#ff7f50"], ["orange", "#ffa500"]],
+  [["hot pink", "#ff69b4"], ["medium violet red", "#c71585"], ["pale violet red", "#db7093"], ["indian red", "#cd5c5c"], ["crimson", "#dc143c"]],
+];
+const swatch = ([n, h]) => `<button type="button" data-v="${n}" title="${n}" aria-label="${n}" style="--c:${h}"></button>`;
+$("swatches").innerHTML = FAVOURITES.map(g => `<div class="srow">${g.map(swatch).join("")}</div>`).join("");
+$("moreSwatches").innerHTML = COLOURS.map(swatch).join("");
+$("moreCol").onclick = () => {
+  const open = $("moreSwatches").hidden;
+  $("moreSwatches").hidden = !open;
+  $("moreCol").textContent = open ? "Fewer colours" : "More colours";
+  $("moreCol").setAttribute("aria-expanded", String(open));
+};
+let custom = false;   // some residues carry their own colour
+function applyColour(v) {
+  if (sel.size) { view.colourResidues([...sel], v); custom = true; }
+  else { view.clearResidueColours(); custom = false; view.set({ colour: v }); markColour(v); }
+  $("colReset").hidden = !custom;
+  renderLegend(); paintSequence();
+}
+function markColour(v) {   // highlight the overall colour's button or swatch
+  document.querySelectorAll("#colour button, #swatches button, #moreSwatches button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
+}
+for (const id of ["colour", "swatches", "moreSwatches"])
+  $(id).addEventListener("click", e => { const b = e.target.closest("button"); if (b && !b.disabled) applyColour(b.dataset.v); });
+function renderLegend() {
+  const p = view.palette(), c = view.options.colour, named = [...FAVOURITES.flat(), ...COLOURS].find(([n]) => n === c);
+  const items = c === "ss" ? [["Helix", p.H], ["Strand", p.E], ["Coil", p.C]]
+    : c === "plddt" ? [[">90", p.P[0]], ["70–90", p.P[1]], ["50–70", p.P[2]], ["<50", p.P[3]]] : named ? [named] : [];
+  $("legend").innerHTML = items.map(([t, col]) => `<span style="--sw:${col}">${t}</span>`).join("") + (custom ? "<span>+ your colours</span>" : "");
+}
+$("colReset").onclick = () => { view.clearResidueColours(); custom = false; $("colReset").hidden = true; renderLegend(); paintSequence(); };
+
+// ---------- sequence panel: drag or click to select residues, then pick a colour ----------
+const RW = 11;   // px per residue, as --rw in app.css
+const sel = new Set();
+let residues = [], anchor = -1, dragBase = null;
+function buildSequence() {
+  residues = view.residues(); sel.clear(); custom = false; $("colReset").hidden = true;
+  const n = residues.length, runs = [];
+  for (let i = 0; i < n;) {
+    let j = i; while (j + 1 < n && residues[j + 1].ss === residues[i].ss) j++;
+    if (residues[i].ss !== "C") runs.push([i, j, residues[i].ss]);
+    i = j + 1;
+  }
+  const sse = runs.map(([a, b, s]) => `<b class="${s}" data-a="${a}" data-b="${b}" title="${s === "H" ? "Helix" : "Strand"} ${residues[a].num}–${residues[b].num}" style="left:${a * RW}px;width:${(b - a + 1) * RW}px"></b>`).join("");
+  const aa = residues.map(r => `<i title="${esc(r.name)} ${r.num}">${r.aa}</i>`).join("");
+  const nums = residues.map((r, i) => r.num % 10 === 0 ? `<span style="left:${i * RW}px">${r.num}</span>` : "").join("");
+  $("seqTrack").style.width = n * RW + "px";
+  $("seqTrack").innerHTML = `<div class="sse" style="width:${n * RW}px">${sse}</div><div class="aa">${aa}</div><div class="num">${nums}</div>`;
+  paintSequence(); showSelection(); renderLegend();
+}
+function paintSequence() {   // each letter in its residue's current colour
+  const cols = view.residueColours();
+  $("seqTrack").querySelectorAll(".aa i").forEach((c, i) => { c.style.color = cols[i]; });
+}
+function ranges() {          // the selection as residue-number ranges: "12–30, 45"
+  const idx = [...sel].sort((a, b) => a - b), out = [];
+  for (let k = 0; k < idx.length;) {
+    let j = k; while (j + 1 < idx.length && idx[j + 1] === idx[j] + 1) j++;
+    out.push(j > k ? `${residues[idx[k]].num}–${residues[idx[j]].num}` : `${residues[idx[k]].num}`);
+    k = j + 1;
+  }
+  return out.length > 5 ? out.slice(0, 5).join(", ") + " …" : out.join(", ");
+}
+function showSelection() {
+  $("seqTrack").querySelectorAll(".aa i").forEach((c, i) => c.classList.toggle("sel", sel.has(i)));
+  const n = sel.size;
+  $("selClear").hidden = !n;
+  $("colourTarget").textContent = n ? `${n} selected` : "all";
+  $("colourTarget").classList.toggle("sel", n > 0);
+  $("selInfo").innerHTML = n ? `<b>${n}</b> selected (${ranges()}). Pick a colour to recolour them.`
+    : "Drag across residues to select, or click a helix or strand. Shift adds to the selection.";
+}
+const indexAt = e => { const r = $("seqTrack").getBoundingClientRect(); return Math.max(0, Math.min(residues.length - 1, Math.floor((e.clientX - r.left) / RW))); };
+$("seqTrack").addEventListener("pointerdown", e => {
+  if (!residues.length || e.button !== 0) return;
+  if (!(e.shiftKey || e.metaKey || e.ctrlKey)) sel.clear();
+  const bar = e.target.closest(".sse b");
+  if (bar) { for (let i = +bar.dataset.a; i <= +bar.dataset.b; i++) sel.add(i); showSelection(); return; }
+  anchor = indexAt(e); dragBase = new Set(sel); sel.add(anchor);
+  $("seqTrack").setPointerCapture(e.pointerId);
+  showSelection();
+});
+$("seqTrack").addEventListener("pointermove", e => {
+  if (anchor < 0) return;
+  const i = indexAt(e);
+  sel.clear(); dragBase.forEach(x => sel.add(x));
+  for (let k = Math.min(anchor, i); k <= Math.max(anchor, i); k++) sel.add(k);
+  showSelection();
+});
+const endDrag = () => { anchor = -1; dragBase = null; };
+$("seqTrack").addEventListener("pointerup", endDrag);
+$("seqTrack").addEventListener("pointercancel", endDrag);
+$("selClear").onclick = () => { sel.clear(); showSelection(); };
+window.addEventListener("keydown", e => { if (e.key === "Escape" && sel.size && $("gifDlg").hidden) { sel.clear(); showSelection(); } });
 
 // ---------- zoom ----------
 $("zin").onclick = () => view.zoomBy(1.25);
@@ -139,11 +227,6 @@ $("shapeReset").onclick = () => {
   const d = SHAPE_DEFAULT;
   for (const [id, v] of Object.entries({ hT: d.hT, flat: d.flat, sW: d.sW, sT: d.sT, head: d.head, coilR: d.coilR })) $(id).value = Math.round(v * 100);
   setSeg("hStyle", "ribbon"); setSeg("arrows", "on");
-};
-$("shapeBtn").onclick = () => {
-  const closed = $("shape").classList.toggle("closed");
-  $("shapeBtn").textContent = closed ? "Shape ▸" : "Shape ▾";
-  $("shapeBtn").setAttribute("aria-expanded", String(!closed));
 };
 
 // ---------- export ----------
@@ -226,6 +309,7 @@ $("gifGo").onclick = async () => {
 };
 
 // ---------- start ----------
+markColour(view.options.colour);
 renderLegend();
 view.loadDefault();
 status("Enter a UniProt accession, hit Random, or drop an AlphaFold .pdb / .cif file.");

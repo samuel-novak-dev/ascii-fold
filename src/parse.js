@@ -1,8 +1,20 @@
-// Minimal PDB / mmCIF readers. Only what the renderer needs: Cα and carbonyl O of the
-// first chain of the first model, B-factor (pLDDT for AlphaFold models), and HELIX/SHEET
-// records when a PDB file has them.
+// Minimal PDB / mmCIF readers. Only what the renderer needs, from the first chain of the first
+// model: every heavy atom (for the van der Waals surface), Cα and carbonyl O by name (for the
+// cartoon), the residue name, B-factor (pLDDT for AlphaFold models), and HELIX/SHEET records when
+// a PDB file has them. Selenomethionine (HETATM MSE) counts as a residue; ligands and water don't.
 //
-// Returns { rows: [{ num, CA, O, b }], chain, ss: string[] | null, isAF, title }
+// Returns { rows: [{ num, name, CA, O, b, atoms: [{ n, e, p }] }], chain, ss: string[] | null, isAF, title }
+
+const keepHet = comp => comp === "MSE";
+const elementOf = (el, name) => (el || name.replace(/[^A-Za-z]/g, "").slice(0, 1)).toUpperCase();
+
+function addAtom(res, order, key, num, comp, name, el, p, b) {
+  let r = res.get(key);
+  if (!r) { r = { num, name: comp, atoms: [] }; res.set(key, r); order.push(key); }
+  r.atoms.push({ n: name, e: el, p });
+  if (name === "CA" || name === "O") r[name] = p;
+  if (name === "CA") r.b = b;
+}
 
 export function parsePDB(text) {
   const res = new Map(), order = [], helix = [], sheet = [];
@@ -13,16 +25,14 @@ export function parsePDB(text) {
     if (rec === "TITLE " && !title) title = l.slice(10).trim();
     if (rec === "HELIX ") { helix.push([l[19], parseInt(l.slice(21, 25)), parseInt(l.slice(33, 37))]); continue; }
     if (rec === "SHEET ") { sheet.push([l[21], parseInt(l.slice(22, 26)), parseInt(l.slice(33, 37))]); continue; }
-    if (rec !== "ATOM  ") continue;
-    const name = l.slice(12, 16).trim();
-    if (name !== "CA" && name !== "O") continue;
+    const comp = l.slice(17, 20).trim();
+    if (rec !== "ATOM  " && !(rec === "HETATM" && keepHet(comp))) continue;
     const alt = l[16]; if (alt !== " " && alt !== "A") continue;
     const ch = l[21]; if (chain === null) chain = ch; if (ch !== chain) continue;
-    const key = l.slice(22, 27);
-    let r = res.get(key);
-    if (!r) { r = { num: parseInt(l.slice(22, 26)) }; res.set(key, r); order.push(key); }
-    r[name] = [parseFloat(l.slice(30, 38)), parseFloat(l.slice(38, 46)), parseFloat(l.slice(46, 54))];
-    if (name === "CA") r.b = parseFloat(l.slice(60, 66));
+    const name = l.slice(12, 16).trim(), el = elementOf(l.slice(76, 78).trim(), name);
+    if (el === "H" || el === "D") continue;
+    addAtom(res, order, l.slice(22, 27), parseInt(l.slice(22, 26)), comp, name, el,
+            [parseFloat(l.slice(30, 38)), parseFloat(l.slice(38, 46)), parseFloat(l.slice(46, 54))], parseFloat(l.slice(60, 66)));
   }
   const rows = order.map(k => res.get(k)).filter(r => r.CA);
   let ss = null;
@@ -49,7 +59,7 @@ export function parseCIF(text) {
   const pick = (a, b) => c(a) >= 0 ? c(a) : c(b);
   const ix = { g: c("group_PDB"), atom: c("label_atom_id"), alt: c("label_alt_id"), chain: pick("auth_asym_id", "label_asym_id"),
                seq: pick("auth_seq_id", "label_seq_id"), ins: c("pdbx_PDB_ins_code"), x: c("Cartn_x"), y: c("Cartn_y"), z: c("Cartn_z"),
-               b: c("B_iso_or_equiv"), model: c("pdbx_PDB_model_num") };
+               b: c("B_iso_or_equiv"), model: c("pdbx_PDB_model_num"), comp: pick("auth_comp_id", "label_comp_id"), el: c("type_symbol") };
   const res = new Map(), order = [];
   let chain = null, model = null;
   for (; i < lines.length; i++) {
@@ -57,16 +67,15 @@ export function parseCIF(text) {
     if (!l) continue;
     if (l[0] === "#" || l[0] === "_" || l.startsWith("loop_")) break;
     const t = cifTokens(l); if (t.length < cols.length) continue;
-    if (ix.g >= 0 && t[ix.g] !== "ATOM") continue;
+    const comp = ix.comp >= 0 ? t[ix.comp] : "UNK";
+    if (ix.g >= 0 && t[ix.g] !== "ATOM" && !(t[ix.g] === "HETATM" && keepHet(comp))) continue;
     if (ix.model >= 0) { if (model === null) model = t[ix.model]; else if (t[ix.model] !== model) break; }
-    const name = t[ix.atom]; if (name !== "CA" && name !== "O") continue;
     if (ix.alt >= 0 && !".?A".includes(t[ix.alt])) continue;
     const ch = t[ix.chain]; if (chain === null) chain = ch; if (ch !== chain) continue;
-    const key = t[ix.seq] + (ix.ins >= 0 ? t[ix.ins] : "");
-    let r = res.get(key);
-    if (!r) { r = { num: parseInt(t[ix.seq]) }; res.set(key, r); order.push(key); }
-    r[name] = [parseFloat(t[ix.x]), parseFloat(t[ix.y]), parseFloat(t[ix.z])];
-    if (name === "CA") r.b = ix.b >= 0 ? parseFloat(t[ix.b]) : 0;
+    const name = t[ix.atom], el = elementOf(ix.el >= 0 ? t[ix.el] : "", name);
+    if (el === "H" || el === "D") continue;
+    addAtom(res, order, t[ix.seq] + (ix.ins >= 0 ? t[ix.ins] : ""), parseInt(t[ix.seq]), comp, name, el,
+            [parseFloat(t[ix.x]), parseFloat(t[ix.y]), parseFloat(t[ix.z])], ix.b >= 0 ? parseFloat(t[ix.b]) : 0);
   }
   return { rows: order.map(k => res.get(k)).filter(r => r.CA), chain, ss: null,
            isAF: /_ma_qa_metric|alphafold/i.test(text.slice(0, 20000)), title: null };

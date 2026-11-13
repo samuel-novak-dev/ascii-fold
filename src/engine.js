@@ -4,7 +4,7 @@ import { parsePDB, parseStructure, readStructureFile } from "./parse.js";
 import { fetchAFDB, describeAFDB } from "./afdb.js";
 import KRAS_6GJ8 from "./data/kras-6gj8.js";
 import { GIFEncoder, quantize, applyPalette } from "./vendor/gifenc.js";
-import { molSurface, SURF_R } from "./surface.js";
+import { vdwSurface, caSurface, RES_BALL } from "./surface.js";
 
 // ---------------------------------------------------------------------------------------
 // createAsciiFold(container, options) → view
@@ -31,7 +31,13 @@ export const COLOURS = [
   ["hot pink", "#ff69b4"], ["magenta", "#ff00ff"], ["white", "#ffffff"], ["light gray", "#d3d3d3"],
   ["gray", "#808080"], ["dark gray", "#a9a9a9"], ["dim gray", "#696969"], ["black", "#000000"],
 ];
-const COLOUR_HEX = Object.fromEntries(COLOURS.map(([n, h]) => [n.replace(/\s+/g, ""), h]));
+// more CSS names (ChimeraX accepts these too), including the app's favourite swatches
+const MORE_COLOURS = [["deep sky blue", "#00bfff"], ["light sky blue", "#87cefa"], ["steel blue", "#4682b4"], ["cadet blue", "#5f9ea0"],
+  ["dark cyan", "#008b8b"], ["tomato", "#ff6347"], ["coral", "#ff7f50"], ["medium violet red", "#c71585"],
+  ["pale violet red", "#db7093"], ["indian red", "#cd5c5c"], ["crimson", "#dc143c"]];
+const COLOUR_HEX = Object.fromEntries([...COLOURS, ...MORE_COLOURS].map(([n, h]) => [n.replace(/\s+/g, ""), h]));
+const ONE = { ALA: "A", ARG: "R", ASN: "N", ASP: "D", CYS: "C", GLN: "Q", GLU: "E", GLY: "G", HIS: "H", ILE: "I", LEU: "L", LYS: "K",
+  MET: "M", PHE: "F", PRO: "P", SER: "S", THR: "T", TRP: "W", TYR: "Y", VAL: "V", MSE: "M", SEC: "U", PYL: "O" };
 /** "cornflower blue", "cornflowerblue", "#6495ed" or "6495ed" → "#6495ed"; anything else → null */
 export function solidColour(v) {
   if (typeof v !== "string") return null;
@@ -42,9 +48,9 @@ export function solidColour(v) {
 }
 export const DETAIL = { xcoarse: 32, coarse: 46, medium: 64 };   // text rows; columns follow width
 export const DEFAULTS = {
-  theme: "paper", colour: "ss", layout: "lr", seam: "dither", glyphs: "classic", detail: "medium",
+  theme: "paper", colour: "ss", layout: "lr", glyphs: "classic", detail: "medium",
   text: "3d", perspective: 0.5, lighting: "default", surface: false,
-  spin: 0.35, blendFrom: 0.25, blendTo: 0.8, interactive: true, background: true, palette: null,
+  spin: 0.35, blendFrom: 0.4, blendTo: 0.6, interactive: true, background: true, palette: null,
   font: '"JetBrains Mono", "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace',
 };
 
@@ -110,6 +116,8 @@ export function createAsciiFold(container, options = {}) {
   let mimg, HASH, zbuf, lbuf, cbuf, ibuf, fcol, dbuf, lastGrid = [];
   let PAL = null, SOLID = null, ramp = GLYPHS.classic;
   let geomId = 0, txtDirty = false, fontEpoch = 0, lastSplat = [], surfBalls = null;
+  const ovr = new Map();   // residue index → colour ("ss", "plddt", or css) set from the sequence
+  let ovrVer = 0, ctab = null;
   const is3D = () => o.text !== "flat" && o.layout !== "ribbon";
 
   function alloc() {
@@ -162,12 +170,28 @@ export function createAsciiFold(container, options = {}) {
     return rgb(c.map((v, i) => v * (1 - fog) + PAL.paper[i] * fog));
   }
   // colour: "ss", "plddt" (falls back to ss without pLDDT) or one solid colour (a ChimeraX name or hex)
+  // Every residue gets one colour: the overall mode (SS, pLDDT or one colour) unless the sequence
+  // panel recoloured it. colours() turns that into a short list of distinct colours plus each
+  // residue's index into it, which the text, ribbon and surface all draw from.
   const colourMode = () => o.colour === "plddt" ? (G && G.hasPlddt ? "plddt" : "ss") : SOLID ? "solid" : "ss";
-  const textColour = q => { const m = colourMode(); return m === "plddt" ? PAL.css.P[q.pk] : m === "solid" ? SOLID.css : PAL.css[q.ss]; };
-  const baseOf = (q, kind) => { const m = colourMode(); return m === "plddt" ? PAL.P[q.pk] : m === "solid" ? SOLID.rgb : PAL[kind]; };
+  function colours() {
+    const mode = colourMode(), css = PAL.css;
+    const key = [mode, css.H, css.E, css.C, css.P.join(), SOLID && SOLID.css, ovrVer, geomId].join("|");
+    if (ctab && ctab.key === key) return ctab;
+    const list = [], idx = new Map(), rc = new Uint8Array(G.N);
+    const add = c => { if (!idx.has(c)) { idx.set(c, list.length); list.push({ css: c, rgb: hex(c) }); } return idx.get(c); };
+    const byMode = (m, i) => m === "plddt" && G.hasPlddt ? css.P[G.pkRes[i]] : m === "solid" ? SOLID.css : css[G.ssRes[i]];
+    for (let i = 0; i < G.N; i++) {
+      const v = ovr.get(i);
+      rc[i] = add(v === undefined ? byMode(mode, i) : v === "ss" || v === "plddt" ? byMode(v, i) : v);
+    }
+    return ctab = { key, list, rc };
+  }
+  const textColour = q => { const t = colours(); return t.list[t.rc[q.res]].css; };
+  const baseOf = q => { const t = colours(); return t.list[t.rc[q.res]].rgb; };
 
   // ---------- view helpers ----------
-  const fitR = () => G.R + (o.surface ? 2.5 : 0);   // the surface reaches past the chain
+  const fitR = () => G.R + (o.surface ? 4 : 0);   // the surface reaches past the chain
   const baseScale = () => G ? Math.min((COLS * 0.5 - 2) / fitR(), (ROWS * 0.5 - 1) / (fitR() * aspect)) : 1;
   function zoomAt(factor, cx = COLS / 2, cy = ROWS / 2) {
     const z2 = Math.max(ZMIN, Math.min(ZMAX, zoom * factor));
@@ -221,7 +245,7 @@ export function createAsciiFold(container, options = {}) {
           if (zf <= zbuf[c]) continue;
           zbuf[c] = zf;
           const diff = Math.max(0, dx * LIGHT[0] - dy * LIGHT[1] + nz * LIGHT[2]);
-          lbuf[c] = gentle ? lit(diff, SL === pts ? AO.C[k] : AO.Res[k]) : Math.min(1, 0.18 + 0.82 * diff + Math.pow(nz, 24) * 0.2);
+          lbuf[c] = gentle ? lit(diff, SL === pts ? AO.C[k] : AO.Res[q.res]) : Math.min(1, 0.18 + 0.82 * diff + Math.pow(nz, 24) * 0.2);
           cbuf[c] = Math.max(0, Math.min(1, 0.55 + 0.45 * (zf + R) / (2 * R)));
           ibuf[c] = k;
         }
@@ -230,11 +254,10 @@ export function createAsciiFold(container, options = {}) {
 
     // the mask that hands cells over to the ribbon. 3D glyphs carry their own paper discs, so
     // there the ribbon just fades in under them instead of being punched full of cell holes.
-    const md = mimg.data, dither = o.seam === "dither";
+    const md = mimg.data;
     for (let j = 0, c = 0; j < ROWS; j++) for (let i = 0; i < COLS; i++, c++) {
       const f = fcol[i];
-      md[c * 4 + 3] = space ? Math.round(Math.min(1, (1 - f) * (dither ? 2 : 1)) * 255)
-        : dither ? (HASH[c] < f * 1.04 && f > 0.001 ? 0 : 255) : Math.round((1 - f) * 255);
+      md[c * 4 + 3] = space ? Math.round(Math.min(1, (1 - f) * 2) * 255) : HASH[c] < f * 1.04 && f > 0.001 ? 0 : 255;
     }
     if (!space) buildChars(dom);
     else { lastGrid = []; if (dom && out.firstChild) out.textContent = ""; }
@@ -264,20 +287,21 @@ export function createAsciiFold(container, options = {}) {
         if (a.gap) { flushCyl(); continue; }
         const A = P[k], B = P[k + 1], zc = (A[2] + B[2]) / 2, cue = Math.max(0, Math.min(1, (zc + R) / (2 * R)));
         if (a.kind === "Hc" && b.kind === "Hc") {
-          if (!cylRun) cylRun = { path: [[X(A), Y(A)]], z: 0, n: 0, ao: 0, col: baseOf(a, "H") };
+          if (cylRun && cylRun.col !== baseOf(a)) flushCyl();   // a recoloured stretch starts its own cylinder
+          if (!cylRun) cylRun = { path: [[X(A), Y(A)]], z: 0, n: 0, ao: 0, col: baseOf(a) };
           cylRun.path.push([X(B), Y(B)]); cylRun.z += zc; cylRun.n++; cylRun.ao += aoMid(k);
           continue;
         }
         flushCyl();
         if (a.kind === "C" || a.kind === "Hc" || a.wOut === 0) {
-          polys.push({ z: zc, line: [X(A), Y(A), X(B), Y(B)], w: 2 * shape.coilR * kpx * scl(zc), c: sh(baseOf(a, "C"), 0.55, aoMid(k), cue) });
+          polys.push({ z: zc, line: [X(A), Y(A), X(B), Y(B)], w: 2 * shape.coilR * kpx * scl(zc), c: sh(baseOf(a), 0.55, aoMid(k), cue) });
           continue;
         }
         const wa = a.wOut, wb = (b.res === a.res || b.kind === a.kind) ? b.wIn : 0.04;
         const Ta = a.th, Tb = b.kind === a.kind ? b.th : a.th;
         const sa = SN[k], sb = SN[k + 1], na = NN[k], nb = NN[k + 1];
         const c1 = add(A, mul(sa, wa)), c2 = add(A, mul(sa, -wa)), c3 = add(B, mul(sb, -wb)), c4 = add(B, mul(sb, wb));
-        const nf = norm(add(na, nb)), col = baseOf(a, a.kind), oval = a.kind === "H";
+        const nf = norm(add(na, nb)), col = baseOf(a), oval = a.kind === "H";
         const aoF = !AO ? 1 : nf[2] >= 0 ? (AO.P[k] + AO.P[k + 1]) / 2 : (AO.M[k] + AO.M[k + 1]) / 2;   // the face we see
         if (oval) {
           // helix: an oval cross-section, like ChimeraX. The normal rolls toward the rims (up to
@@ -326,7 +350,7 @@ export function createAsciiFold(container, options = {}) {
     if (o.surface && o.layout !== "ascii") drawSurfels({ cy, sy, cx, sx, kz, scl, kpx, OX, OY, R, gentle, lit });
     mctx.putImageData(mimg, 0, 0);
     rctx.globalCompositeOperation = "destination-in";
-    rctx.imageSmoothingEnabled = o.seam === "soft";
+    rctx.imageSmoothingEnabled = false;
     rctx.drawImage(mask, 0, 0, rib.width, rib.height);
     rctx.globalCompositeOperation = "source-over";
 
@@ -448,8 +472,12 @@ export function createAsciiFold(container, options = {}) {
   // flat text over the surface splats one ball per residue instead of the spline
   function splatList() {
     if (!o.surface) return G.pts;
-    if (!surfBalls || surfBalls.id !== geomId)
-      surfBalls = { id: geomId, list: G.ca.map((p, i) => ({ p, r: SURF_R, ss: G.ssRes[i], pk: G.pkRes[i] })) };
+    if (!surfBalls || surfBalls.id !== geomId) {
+      const A = G.atoms, list = A.sideChains   // every heavy atom at its radius, or one soft ball per residue
+        ? Array.from(A.R, (r, i) => ({ p: [A.P[i * 3], A.P[i * 3 + 1], A.P[i * 3 + 2]], r: r * 1.15, res: A.res[i] }))
+        : G.ca.map((p, i) => ({ p, r: RES_BALL, res: i }));
+      surfBalls = { id: geomId, list };
+    }
     return surfBalls.list;
   }
 
@@ -457,34 +485,33 @@ export function createAsciiFold(container, options = {}) {
   function surface(step) {
     const kind = o.surface ? "surface" : "cartoon";
     if (surf && surf.id === geomId && surf.step === step && surf.kind === kind) return surf;
-    const SSI = { H: 0, E: 1, C: 2 };
-    let spacing = step * SURF_SPACING, Pp, Nn, ss, pk;
-    if (o.surface) {
-      let ms = molSurface(G.ca, spacing);
-      if (ms.n > MAX_GLYPHS) { spacing *= Math.sqrt(ms.n / MAX_GLYPHS); ms = molSurface(G.ca, spacing); }
-      Pp = ms.P; Nn = ms.N;
-      ss = Array.from(ms.res, r => SSI[G.ssRes[r]] ?? 2); pk = Array.from(ms.res, r => G.pkRes[r]);
-    } else ({ Pp, Nn, ss, pk } = cartoonPoints(step));
-    const n = ss.length, hash = new Float32Array(n);
+    let spacing = step * SURF_SPACING, Pp, Nn, res;
+    if (o.surface) {   // side chains at their van der Waals radii when the file has them, else Cα balls
+      const build = sp => G.atoms.sideChains ? vdwSurface(G.atoms, sp) : caSurface(G.ca, sp);
+      let ms = build(spacing);
+      if (ms.n > MAX_GLYPHS) { spacing *= Math.sqrt(ms.n / MAX_GLYPHS); ms = build(spacing); }
+      ({ P: Pp, N: Nn, res } = ms);
+    } else ({ Pp, Nn, res } = cartoonPoints(step));
+    const n = res.length, hash = new Float32Array(n);
     for (let i = 0; i < n; i++) { const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453; hash[i] = x - Math.floor(x); }
-    surf = { id: geomId, step, kind, spacing, n, P: Float32Array.from(Pp), N: Float32Array.from(Nn), ss: Uint8Array.from(ss), pk: Uint8Array.from(pk), hash,
+    surf = { id: geomId, step, kind, spacing, n, P: Float32Array.from(Pp), N: Float32Array.from(Nn), res: Uint32Array.from(res), hash,
              ix: new Uint32Array(n), wn: new Float32Array(n * 3), zs: new Float32Array(n), tx: new Float32Array(n), ty: new Float32Array(n),
              tm: new Float32Array(n * 4), tg: new Uint16Array(n), tr: new Uint16Array(n), tk: new Float32Array(n), ord: new Uint32Array(n) };
     return surf;
   }
 
   function cartoonPoints(step) {
-    const pts = G.pts, SSI = { H: 0, E: 1, C: 2 }, da = step * ALONG, dr = step * AROUND;
-    const Pp = [], Nn = [], ss = [], pk = [];
-    const put = (c, n, sgn, d1, off1, d2, off2, si, pi) => {   // c + d1·off1 + d2·off2, normal n·sgn
+    const pts = G.pts, da = step * ALONG, dr = step * AROUND;
+    const Pp = [], Nn = [], res = [];
+    const put = (c, n, sgn, d1, off1, d2, off2, ri) => {   // c + d1·off1 + d2·off2, normal n·sgn, residue ri
       Pp.push(c[0] + d1[0] * off1 + d2[0] * off2, c[1] + d1[1] * off1 + d2[1] * off2, c[2] + d1[2] * off1 + d2[2] * off2);
-      Nn.push(n[0] * sgn, n[1] * sgn, n[2] * sgn); ss.push(si); pk.push(pi);
+      Nn.push(n[0] * sgn, n[1] * sgn, n[2] * sgn); res.push(ri);
     };
     let acc = 0, next = 0, row = 0;
     for (let k = 0; k < pts.length - 1; k++) {
       const a = pts[k], b = pts[k + 1], L = dist(a.p, b.p);
       if (a.gap) { acc += L; next = acc + da * 0.5; continue; }
-      const g = segShape(k), si = SSI[g.ss] ?? 2, pi = a.pk;
+      const g = segShape(k), ri = a.res;
       while (next <= acc + L) {
         const t = L > 1e-6 ? (next - acc) / L : 0, u = 1 - t;
         const c = add(mul(a.p, u), mul(b.p, t));
@@ -493,29 +520,29 @@ export function createAsciiFold(container, options = {}) {
           const m = Math.max(4, Math.round(2 * Math.PI * g.r / dr)), off = (row & 1) * 0.5;
           for (let j = 0; j < m; j++) {
             const th = 2 * Math.PI * (j + off) / m, n = add(mul(e1, Math.cos(th)), mul(e2, Math.sin(th)));
-            put(c, n, 1, n, g.r, e2, 0, si, pi);
+            put(c, n, 1, n, g.r, e2, 0, ri);
           }
         } else {                // a row across the band, on both faces, plus one glyph on each edge
           const w = g.wa * u + g.wb * t, h = g.ha * u + g.hb * t;
           const m = Math.max(1, Math.round(2 * w / dr)), gap = 2 * w / m, off = m > 1 ? ((row & 1) ? 0.25 : -0.25) : 0;
           for (let j = 0; j < m; j++) {
             const s = -w + gap * (j + 0.5 + off);
-            put(c, e2, 1, e1, s, e2, h, si, pi); put(c, e2, -1, e1, s, e2, -h, si, pi);
+            put(c, e2, 1, e1, s, e2, h, ri); put(c, e2, -1, e1, s, e2, -h, ri);
           }
-          if (w > 0.3 * dr) { put(c, e1, 1, e1, w, e2, 0, si, pi); put(c, e1, -1, e1, -w, e2, 0, si, pi); }
+          if (w > 0.3 * dr) { put(c, e1, 1, e1, w, e2, 0, ri); put(c, e1, -1, e1, -w, e2, 0, ri); }
         }
         row++; next += da;
       }
       acc += L;
     }
-    return { Pp, Nn, ss, pk };
+    return { Pp, Nn, res };
   }
 
   // ---------- the solid surface: shaded discs on the surface points, drawn back to front ----------
   let discs = null, discsKey = "";
   function discAtlas(hi) {   // one disc per colour × fog step × shade step
-    const m = colourMode(), cols = m === "ss" ? [PAL.H, PAL.E, PAL.C] : m === "plddt" ? PAL.P : [SOLID.rgb];
-    const key = [m, cols.join(";"), PAL.css.bg, hi].join("|");
+    const t = colours(), cols = t.list.map(c => c.rgb);
+    const key = [t.key, PAL.css.bg, hi].join("|");
     if (discs && discsKey === key) return discs;
     discs = discs || document.createElement("canvas");
     discs.width = SHADES * DCELL; discs.height = cols.length * FOGS * DCELL;
@@ -535,8 +562,8 @@ export function createAsciiFold(container, options = {}) {
     const { cy, sy, cx, sx, kz, scl, kpx, OX, OY, R, gentle, lit } = F;
     const sf = surface(textStep());
     if (gentle && !sf.ao) sf.ao = surfaceAO(sf);
-    const { n, P: SP, N: SN, ss, pk, zs, tx, ty, tg, tr, tk, ord } = sf;   // shares buffers with the 3D text, which runs after
-    const W = rib.width, H = rib.height, mode = colourMode(), d0 = 2 * SURFEL * sf.spacing * kpx;
+    const { n, P: SP, N: SN, res, zs, tx, ty, tg, tr, tk, ord } = sf;   // shares buffers with the 3D text, which runs after
+    const W = rib.width, H = rib.height, rc = colours().rc, d0 = 2 * SURFEL * sf.spacing * kpx;
     let cnt = 0;
     for (let i = 0; i < n; i++) {
       const i3 = i * 3;
@@ -552,7 +579,7 @@ export function createAsciiFold(container, options = {}) {
       const dt = Math.max(0, Math.min(1, (vz + R) / (2 * R)));
       zs[cnt] = vz; tx[cnt] = X; ty[cnt] = Y; tk[cnt] = d;
       tg[cnt] = Math.round(s * (SHADES - 1));
-      tr[cnt] = (mode === "ss" ? ss[i] : mode === "plddt" ? pk[i] : 0) * FOGS + Math.round((1 - dt) * (FOGS - 1));
+      tr[cnt] = rc[res[i]] * FOGS + Math.round((1 - dt) * (FOGS - 1));
       cnt++;
     }
     const order = ord.subarray(0, cnt);
@@ -569,9 +596,8 @@ export function createAsciiFold(container, options = {}) {
 
   // One sprite per glyph × colour × fog step; the blank glyph's slot holds the paper disc.
   function glyphAtlas() {
-    const m = colourMode(), css = PAL.css;
-    const cols = m === "ss" ? [css.H, css.E, css.C] : m === "plddt" ? css.P : [SOLID.css];
-    const key = [m, cols.join(), css.bg, ramp, o.font, fontEpoch].join("|");
+    const t = colours(), css = PAL.css, cols = t.list.map(c => c.css);
+    const key = [t.key, css.bg, ramp, o.font, fontEpoch].join("|");
     if (atlas && atlasKey === key) return atlas;
     atlas = atlas || document.createElement("canvas");
     atlas.width = ramp.length * CELL; atlas.height = cols.length * FOGS * CELL;
@@ -595,11 +621,11 @@ export function createAsciiFold(container, options = {}) {
     const { cy, sy, cx, sx, kz, scl, kpx, OX, OY, dpr, R, gentle, lit } = F;
     const step = textStep(), sf = surface(step);
     if (gentle && !sf.ao) sf.ao = surfaceAO(sf);
-    const { n, P: SP, N: SN, ss, pk, hash, ix, wn, zs, tx, ty, tm, tg, tr, tk, ord } = sf;
+    const { n, P: SP, N: SN, res, hash, ix, wn, zs, tx, ty, tm, tg, tr, tk, ord } = sf;
     const cwp = cw * dpr, lhp = lh * dpr, size0 = step * GLYPH_SPRITE * kpx;
     const DW = COLS * DS, DH = ROWS * DS, ux = cwp / DS, uy = lhp / DS, W = COLS * cwp, H = ROWS * lhp;
     const spA = step * Math.max(ALONG, AROUND), rad0 = 0.6 * spA * kpx;   // neighbour spacing (Å), splat radius (px)
-    const night = o.theme === "night", nr = ramp.length - 1, mode = colourMode();
+    const night = o.theme === "night", nr = ramp.length - 1, rc = colours().rc;
 
     // pass 1: rotate, drop back faces and off-screen glyphs, splat the rest into a depth buffer.
     // The buffer holds the nearest text surface everywhere, so pass 2 can tell a glyph that is
@@ -662,7 +688,7 @@ export function createAsciiFold(container, options = {}) {
       tm[k4] = ax * s; tm[k4 + 1] = ay * s; tm[k4 + 2] = bx * s; tm[k4 + 3] = by * s;
       tg[cnt] = Math.max(1, Math.min(nr, Math.round(v * nr)));
       tk[cnt] = s * KNOCK * f * f;          // the paper disc shrinks away where the ribbon takes over
-      tr[cnt] = (mode === "ss" ? ss[i] : mode === "plddt" ? pk[i] : 0) * FOGS + Math.round((1 - dt) * (FOGS - 1));
+      tr[cnt] = rc[res[i]] * FOGS + Math.round((1 - dt) * (FOGS - 1));
       cnt++;
     }
     const order = ord.subarray(0, cnt);
@@ -784,6 +810,7 @@ export function createAsciiFold(container, options = {}) {
   let loadToken = 0, aborter = null;
   function setStructure(parsed, meta = {}) {
     G = buildGeometry(parsed, shape); geomId++;
+    ovr.clear(); ovrVer++;
     lastParsed = parsed;
     info = { title: meta.title || parsed.title || "Structure", sub: meta.sub || "", residues: G.N, meanPlddt: G.hasPlddt ? G.meanP : null,
              hasPlddt: G.hasPlddt, ssFromGeometry: G.ssAuto, chain: parsed.chain, entryUrl: meta.entryUrl || null, acc: meta.acc || null };
@@ -888,6 +915,19 @@ export function createAsciiFold(container, options = {}) {
       }
     },
     palette() { return { ...PAL.css }; },
+    /** Residues for a sequence view: [{ i, num, name, aa, ss }]. */
+    residues() { return G ? G.resName.map((name, i) => ({ i, num: G.resNum[i], name, aa: ONE[name] || "X", ss: G.ssRes[i] })) : []; },
+    /** Each residue's current colour (css), after any per-residue colours. */
+    residueColours() { if (!G) return []; const t = colours(); return Array.from(t.rc, c => t.list[c].css); },
+    /** Colour residues (indices) by "ss", "plddt", a colour name or hex; null returns them to the overall colour. */
+    colourResidues(indices, colour) {
+      const c = colour == null ? null : colour === "ss" || colour === "plddt" ? colour : solidColour(colour);
+      if (colour != null && !c) throw new Error(`Unknown colour: ${colour}`);
+      for (const i of indices) if (c === null) ovr.delete(i); else ovr.set(i, c);
+      ovrVer++; kick(); emit("colour"); return api;
+    },
+    /** Drop all per-residue colours. */
+    clearResidueColours() { ovr.clear(); ovrVer++; kick(); emit("colour"); return api; },
     on(ev, fn) { (listeners[ev] = listeners[ev] || []).push(fn); return () => { listeners[ev] = listeners[ev].filter(f => f !== fn); }; },
     destroy() {
       destroyed = true;

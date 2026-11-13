@@ -37,72 +37,77 @@
 </header>
 <div id="status" role="status"></div>
 
-<main id="stage"></main>
+<div class="work">
+  <div class="view">
+    <main id="stage"></main>
+    <div class="zoom" aria-label="Zoom">
+      <button type="button" id="zout" aria-label="Zoom out">−</button><button type="button" id="zfit">Fit</button><button type="button" id="zin" aria-label="Zoom in">+</button>
+      <span id="zval">1.0×</span>
+    </div>
+    <div class="hint"><span>Drag to rotate · Shift-drag to pan · Scroll to zoom · Double-click to reset</span><span id="credit"></span></div>
+  </div>
 
-<div class="hint"><span>Drag to rotate · Shift-drag or right-drag to pan · Scroll or pinch to zoom · Double-click to reset</span><span id="credit"></span></div>
+  <aside id="panel" aria-label="Display settings">
+    <section>
+      <h3>Show</h3>
+      <div class="seg" id="surface"><button data-v="off" class="on">Cartoon</button><button data-v="on">Surface</button></div>
+      <div class="seg" id="text"><button data-v="3d" class="on">3D text</button><button data-v="flat">Flat text</button></div>
+      <div class="seg grid2" id="layout"><button data-v="lr" class="on">Text → model</button><button data-v="rl">Model → text</button><button data-v="ascii">Text only</button><button data-v="ribbon">Model only</button></div>
+    </section>
 
-<footer>
-  <div class="ctl"><label>Zoom</label>
-    <div class="seg"><button type="button" id="zout" aria-label="Zoom out">−</button><button type="button" id="zfit">Fit</button><button type="button" id="zin" aria-label="Zoom in">+</button></div>
-    <span id="zval" class="zval">1.0×</span>
-  </div>
-  <div class="ctl"><label>Detail</label>
-    <div class="seg" id="detail"><button data-v="xcoarse">Extra coarse</button><button data-v="coarse">Coarse</button><button data-v="medium" class="on">Medium</button></div>
-  </div>
-  <div class="ctl"><label for="speed">Spin</label><input id="speed" type="range" min="0" max="100" value="35"></div>
-  <div class="ctl"><label for="f0">Blend from</label><input id="f0" type="range" min="0" max="100" value="25"></div>
-  <div class="ctl"><label for="f1">to</label><input id="f1" type="range" min="0" max="100" value="80"></div>
-  <div class="ctl"><label>Layout</label>
-    <div class="seg" id="layout"><button data-v="lr" class="on">Text→Ribbon</button><button data-v="rl">Ribbon→Text</button><button data-v="ascii">Text</button><button data-v="ribbon">Ribbon</button></div>
-  </div>
-  <div class="ctl"><label>Surface</label>
-    <div class="seg" id="surface"><button data-v="off" class="on">Off</button><button data-v="on">On</button></div>
-  </div>
-  <div class="ctl"><label>Text</label>
-    <div class="seg" id="text"><button data-v="3d" class="on">3D</button><button data-v="flat">Flat</button></div>
-  </div>
-  <div class="ctl"><label>Lighting</label>
-    <div class="seg" id="lighting"><button data-v="default" class="on">Default</button><button data-v="gentle">Gentle</button></div>
-  </div>
-  <div class="ctl"><label for="persp">Perspective</label><input id="persp" type="range" min="0" max="100" value="50"></div>
-  <div class="ctl"><label>Seam</label>
-    <div class="seg" id="seam"><button data-v="dither" class="on">Dither</button><button data-v="soft">Soft</button></div>
-  </div>
-  <div class="ctl"><label>Colour</label>
-    <div class="seg" id="colour"><button data-v="ss" class="on">SS</button><button data-v="plddt" id="plddtBtn" disabled>pLDDT</button></div>
-    <div class="swatches" id="swatches" role="group" aria-label="One colour (ChimeraX basic colours)"></div>
-  </div>
-  <div class="ctl"><label>Ground</label>
-    <div class="seg" id="theme"><button data-v="paper" class="on">Paper</button><button data-v="night">Night</button></div>
-  </div>
-  <div class="ctl"><label>Glyphs</label>
-    <div class="seg" id="glyphs"><button data-v="classic" class="on">Classic</button><button data-v="blocks">Blocks</button><button data-v="geo">Geo</button></div>
-  </div>
-  <div class="legend" id="legend"></div>
-  <button class="btn ghost" type="button" id="shapeBtn" aria-expanded="true" aria-controls="shape">Shape ▾</button>
-  <button class="btn" type="button" id="png">Snapshot</button>
-  <button class="btn" type="button" id="gifBtn">GIF</button>
-  <button class="btn alt" type="button" id="copy">Copy text</button>
-  <button class="btn alt" type="button" id="share">Share</button>
-</footer>
+    <section>
+      <h3>Colour <span id="colourTarget" class="target">all</span></h3>
+      <div class="seg" id="colour"><button data-v="ss" class="on">Structure</button><button data-v="plddt" id="plddtBtn" disabled>pLDDT</button></div>
+      <div class="swatches" id="swatches" role="group" aria-label="Colours"></div>
+      <button type="button" class="link" id="moreCol" aria-expanded="false">More colours</button>
+      <div class="swatches basic" id="moreSwatches" role="group" aria-label="ChimeraX basic colours" hidden></div>
+      <div class="legend" id="legend"></div>
+    </section>
 
-<section id="shape" class="shape" aria-label="Shape controls">
-  <div class="grp"><span class="gl"><i class="sw h"></i>Helix</span>
-    <div class="seg" id="hStyle"><button data-v="ribbon" class="on">Ribbon</button><button data-v="cylinder">Cylinder</button></div>
-    <div class="ctl"><label for="hW">Width</label><input id="hW" type="range" min="50" max="250" value="100"></div>
-    <div class="ctl" id="hTwrap"><label for="hT">Thickness</label><input id="hT" type="range" min="4" max="120" value="20"></div>
+    <section>
+      <h3>Look</h3>
+      <div class="seg" id="lighting"><button data-v="default" class="on">Default light</button><button data-v="gentle">Gentle</button></div>
+      <div class="seg" id="theme"><button data-v="paper" class="on">Paper</button><button data-v="night">Night</button></div>
+      <div class="seg" id="detail"><button data-v="xcoarse">X-coarse</button><button data-v="coarse">Coarse</button><button data-v="medium" class="on">Medium</button></div>
+      <label class="slider"><span>Spin</span><input id="speed" type="range" min="0" max="100" value="35"></label>
+      <label class="slider"><span>Perspective</span><input id="persp" type="range" min="0" max="100" value="50"></label>
+    </section>
+
+    <details id="more">
+      <summary>Glyphs and shape</summary>
+      <div class="seg" id="glyphs"><button data-v="classic" class="on">Classic</button><button data-v="blocks">Blocks</button><button data-v="geo">Geo</button></div>
+      <p class="gl"><i class="sw h"></i>Helix</p>
+      <div class="seg" id="hStyle"><button data-v="ribbon" class="on">Ribbon</button><button data-v="cylinder">Cylinder</button></div>
+      <label class="slider"><span>Width</span><input id="hW" type="range" min="50" max="250" value="100"></label>
+      <label class="slider" id="hTwrap"><span>Thickness</span><input id="hT" type="range" min="4" max="120" value="20"></label>
+      <p class="gl"><i class="sw e"></i>Strand</p>
+      <label class="slider"><span>Flatten</span><input id="flat" type="range" min="0" max="100" value="100"></label>
+      <label class="slider"><span>Width</span><input id="sW" type="range" min="50" max="220" value="100"></label>
+      <label class="slider"><span>Thickness</span><input id="sT" type="range" min="2" max="80" value="20"></label>
+      <div class="seg" id="arrows"><button data-v="on" class="on">Arrows</button><button data-v="off">No arrows</button></div>
+      <label class="slider" id="headWrap"><span>Arrow head</span><input id="head" type="range" min="120" max="360" value="230"></label>
+      <p class="gl"><i class="sw c"></i>Coil</p>
+      <label class="slider"><span>Width</span><input id="coilR" type="range" min="15" max="120" value="48"></label>
+      <button class="btn ghost" type="button" id="shapeReset">Reset shape</button>
+    </details>
+
+    <section class="actions">
+      <button class="btn" type="button" id="png">Snapshot</button>
+      <button class="btn" type="button" id="gifBtn">GIF</button>
+      <button class="btn alt" type="button" id="copy">Copy text</button>
+      <button class="btn alt" type="button" id="share">Share</button>
+    </section>
+  </aside>
+</div>
+
+<section id="seq" aria-label="Sequence">
+  <div class="seqhead">
+    <h3>Sequence</h3>
+    <span id="selInfo" class="selinfo">Drag across residues to select, or click a helix or strand. Shift adds to the selection.</span>
+    <button type="button" class="link" id="selClear" hidden>Clear selection</button>
+    <button type="button" class="link" id="colReset" hidden>Reset colours</button>
   </div>
-  <div class="grp"><span class="gl"><i class="sw e"></i>Strand</span>
-    <div class="ctl"><label for="flat">Flatten</label><input id="flat" type="range" min="0" max="100" value="60"></div>
-    <div class="ctl"><label for="sW">Width</label><input id="sW" type="range" min="50" max="220" value="115"></div>
-    <div class="ctl"><label for="sT">Thickness</label><input id="sT" type="range" min="2" max="80" value="14"></div>
-    <div class="seg" id="arrows"><button data-v="on" class="on">Arrows</button><button data-v="off">None</button></div>
-    <div class="ctl" id="headWrap"><label for="head">Head</label><input id="head" type="range" min="120" max="360" value="230"></div>
-  </div>
-  <div class="grp"><span class="gl"><i class="sw c"></i>Coil</span>
-    <div class="ctl"><label for="coilR">Width</label><input id="coilR" type="range" min="15" max="120" value="48"></div>
-    <button class="btn ghost" type="button" id="shapeReset">Reset shape</button>
-  </div>
+  <div class="seqscroll" id="seqScroll"><div class="seqtrack" id="seqTrack"></div></div>
 </section>
 
 <div id="gifDlg" class="dlg" hidden role="dialog" aria-modal="true" aria-labelledby="gifTitle">

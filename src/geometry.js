@@ -1,5 +1,8 @@
 import { add, sub, mul, dot, cross, norm, dist } from "./vec.js";
 import { assignSS } from "./ss.js";
+import { VDW, VDW_DEFAULT } from "./surface.js";
+
+const BACKBONE = new Set(["N", "CA", "C", "O", "OXT"]);
 
 // Builds the renderable chain: a Catmull-Rom spline through Cα with, per sample, a radius
 // (for the text renderer) and ribbon frame/width/thickness (for the cartoon renderer).
@@ -8,7 +11,7 @@ export const pbin = v => v > 90 ? 0 : v > 70 ? 1 : v > 50 ? 2 : 3;   // AlphaFol
 
 // ---------- shape parameters (Å) ----------
 // helices follow ChimeraX's default cartoon: a 2.0 Å wide, 0.4 Å thick oval ribbon
-export const SHAPE_DEFAULT = { hStyle: "ribbon", hW: 1.0, hT: 0.2, cylR: 2.3, sW: 1.15, sT: 0.14, flat: 0.6, arrows: true, head: 2.3, coilR: 0.48 };
+export const SHAPE_DEFAULT = { hStyle: "ribbon", hW: 1.0, hT: 0.2, cylR: 2.3, sW: 1.0, sT: 0.2, flat: 1.0, arrows: true, head: 2.3, coilR: 0.48 };
 
 function helixAxis(CA, s, e) {
   // per-residue axis points for helix run s..e (4-residue weighted average cancels the 3.6-residue turn)
@@ -131,8 +134,24 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
   const rMax = radii[radii.length - 1], r95 = radii[Math.floor(radii.length * 0.95)];
   const R = Math.min(rMax, r95 * 1.12) + 2.2;
 
+  // every heavy atom, centred like the Cα, at its van der Waals radius (for the side-chain surface).
+  // Files with only Cα (and O) have no side chains, and the surface falls back to one ball per residue.
+  const nAt = rows.reduce((s, r) => s + (r.atoms ? r.atoms.length : 0), 0);
+  const AP = new Float32Array(nAt * 3), AR = new Float32Array(nAt), ARes = new Uint32Array(nAt);
+  let ai = 0, withSide = 0;
+  rows.forEach((r, i) => {
+    let side = false;
+    for (const a of r.atoms || []) {
+      AP[ai * 3] = a.p[0] - cen[0]; AP[ai * 3 + 1] = a.p[1] - cen[1]; AP[ai * 3 + 2] = a.p[2] - cen[2];
+      AR[ai] = VDW[a.e] || VDW_DEFAULT; ARes[ai] = i; ai++;
+      if (!BACKBONE.has(a.n)) side = true;
+    }
+    if (side) withSide++;
+  });
+  const atoms = { n: nAt, P: AP, R: AR, res: ARes, sideChains: withSide > N * 0.5 };
+
   const plddts = rows.map(r => r.b || 0);
   const hasPlddt = parsed.isAF || false;
   const meanP = plddts.reduce((a, b) => a + b, 0) / N;
-  return { pts, R, hasPlddt, N, meanP, ca: CA0, ssRes: SS, pkRes: PB, ssCounts: { H: SS.filter(s => s === "H").length, E: SS.filter(s => s === "E").length }, ssAuto: !parsed.ss };
+  return { pts, R, hasPlddt, N, meanP, ca: CA0, ssRes: SS, pkRes: PB, atoms, resName: rows.map(r => r.name || "UNK"), resNum: rows.map(r => r.num), ssCounts: { H: SS.filter(s => s === "H").length, E: SS.filter(s => s === "E").length }, ssAuto: !parsed.ss };
 }

@@ -6,7 +6,7 @@ import { createAsciiFold } from "./engine.js";
 //   accession     UniProt accession to fetch from AlphaFold DB
 //   src           URL of a .pdb / .cif file to load instead (must be CORS-readable)
 //   theme         paper | night                      colour      ss | plddt | a ChimeraX colour name or hex
-//   layout        lr | rl | ascii | ribbon           seam        dither | soft
+//   layout        lr | rl | ascii | ribbon
 //   text          3d | flat                          perspective 0–1 (default 0.5; 0 = orthographic)
 //   lighting      default | gentle (soft ambient occlusion, as in ChimeraX)
 //   surface       show the molecular surface instead of the cartoon (attribute present = on)
@@ -24,7 +24,7 @@ import { createAsciiFold } from "./engine.js";
 
 const OPTION_ATTRS = {
   theme: v => ({ theme: v }), colour: v => ({ colour: v }), color: v => ({ colour: v }), layout: v => ({ layout: v }),
-  seam: v => ({ seam: v }), glyphs: v => ({ glyphs: v }),
+  glyphs: v => ({ glyphs: v }),
   text: v => ({ text: v === "flat" ? "flat" : "3d" }),
   lighting: v => ({ lighting: v === "gentle" ? "gentle" : "default" }),
   surface: v => ({ surface: v !== null && v !== "false" }),
