@@ -36,7 +36,7 @@ export async function fetchAFDB(raw, { signal } = {}) {
     throw new AFDBError(`Couldn't reach AlphaFold DB (${e.message || e}).`, "network", acc);
   }
   const parsed = parseStructure(text);
-  parsed.isAF = true;
+  parsed.fromAFDB = parsed.hasPlddt = parsed.bFactors = true;
   return { parsed, meta, acc, entryUrl };
 }
 

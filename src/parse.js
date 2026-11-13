@@ -1,9 +1,13 @@
 // Minimal PDB / mmCIF readers. Only what the renderer needs, from the first chain of the first
 // model: every heavy atom (for the van der Waals surface), Cα and carbonyl O by name (for the
-// cartoon), the residue name, B-factor (pLDDT for AlphaFold models), and HELIX/SHEET records when
+// cartoon), the residue name, B-factor (pLDDT for predicted models), and HELIX/SHEET records when
 // a PDB file has them. Selenomethionine (HETATM MSE) counts as a residue; ligands and water don't.
 //
-// Returns { rows: [{ num, name, CA, O, b, atoms: [{ n, e, p }] }], chain, ss: string[] | null, isAF, title }
+// Returns { rows: [{ num, name, CA, O, b, atoms: [{ n, e, p, b }] }], chain, ss: string[] | null,
+//           bFactors, hasPlddt, fromAFDB, title }
+//   bFactors  the B-factor column has varying values, so there's something to colour by
+//   hasPlddt  it looks like per-residue confidence (pLDDT, 0–100), see confidence()
+//   fromAFDB  the file comes from AlphaFold DB (for its CC BY 4.0 credit)
 
 const keepHet = comp => comp === "MSE";
 const elementOf = (el, name) => (el || name.replace(/[^A-Za-z]/g, "").slice(0, 1)).toUpperCase();
@@ -11,7 +15,7 @@ const elementOf = (el, name) => (el || name.replace(/[^A-Za-z]/g, "").slice(0, 1
 function addAtom(res, order, key, num, comp, name, el, p, b) {
   let r = res.get(key);
   if (!r) { r = { num, name: comp, atoms: [] }; res.set(key, r); order.push(key); }
-  r.atoms.push({ n: name, e: el, p });
+  r.atoms.push({ n: name, e: el, p, b });
   if (name === "CA" || name === "O") r[name] = p;
   if (name === "CA") r.b = b;
 }
@@ -40,7 +44,7 @@ export function parsePDB(text) {
   for (const [c, a, b] of helix) if (c === chain) for (let i = a; i <= b; i++) m.set(i, "H");
   for (const [c, a, b] of sheet) if (c === chain) for (let i = a; i <= b; i++) m.set(i, "E");
   if (m.size) ss = rows.map(r => m.get(r.num) || "C");
-  return { rows, chain, ss, isAF: /ALPHAFOLD/i.test(text.slice(0, 5000)), title };
+  return confidence({ rows, chain, ss, title, fromAFDB: /^TITLE {5}ALPHAFOLD/m.test(text.slice(0, 5000)) }, text);
 }
 
 function cifTokens(line) {
@@ -77,8 +81,33 @@ export function parseCIF(text) {
     addAtom(res, order, t[ix.seq] + (ix.ins >= 0 ? t[ix.ins] : ""), parseInt(t[ix.seq]), comp, name, el,
             [parseFloat(t[ix.x]), parseFloat(t[ix.y]), parseFloat(t[ix.z])], ix.b >= 0 ? parseFloat(t[ix.b]) : 0);
   }
-  return { rows: order.map(k => res.get(k)).filter(r => r.CA), chain, ss: null,
-           isAF: /_ma_qa_metric|alphafold/i.test(text.slice(0, 20000)), title: null };
+  return confidence({ rows: order.map(k => res.get(k)).filter(r => r.CA), chain, ss: null, title: null,
+                      fromAFDB: /AlphaFoldDB|^data_AF-/m.test(text.slice(0, 30000)) }, text);
+}
+
+// The B-factor column. Colouring by it (the "pLDDT" colour) only needs values that vary; values
+// on a 0–1 scale (ESMFold and others) are rescaled to 0–100. Whether they *are* pLDDT, for the
+// "mean pLDDT" label, is a guess: yes if the file says so (ModelCIF's _ma_qa_metric, or "pLDDT"),
+// if they were on a 0–1 scale, or, unless the file declares an experimental method, if a
+// predictor is named or every residue carries one value on all its atoms.
+const STRONG = /_ma_qa_metric|plddt/i;
+const PREDICTOR = /alphafold|colabfold|esmfold|openfold|boltz|chai-?1|rosettafold|protenix|helixfold|omegafold/i;
+const EXPERIMENT = /^EXPDTA|_exptl\.method|_refine\.ls_/m;
+function confidence(parsed, text) {
+  const rows = parsed.rows;
+  let lo = Infinity, hi = -Infinity;
+  for (const r of rows) if (Number.isFinite(r.b)) { lo = Math.min(lo, r.b); hi = Math.max(hi, r.b); }
+  parsed.bFactors = parsed.hasPlddt = false;
+  if (!(hi > lo)) return parsed;                        // none, or all the same: nothing to colour by
+  parsed.bFactors = true;
+  const unit = lo >= 0 && hi <= 1;
+  if (unit) for (const r of rows) { r.b *= 100; for (const a of r.atoms) a.b *= 100; }
+  if (!(lo >= 0 && (unit || hi <= 100))) return parsed;
+  let multi = 0, same = 0;
+  for (const r of rows) { if (r.atoms.length < 3) continue; multi++; if (r.atoms.every(a => a.b === r.atoms[0].b)) same++; }
+  const perResidue = multi >= 10 && same >= 0.95 * multi;
+  parsed.hasPlddt = STRONG.test(text) || unit || (!EXPERIMENT.test(text) && (PREDICTOR.test(text) || perResidue));
+  return parsed;
 }
 
 export function parseStructure(text) {
@@ -95,6 +124,6 @@ export async function readStructureFile(file) {
   } else text = await file.text();
   const parsed = parseStructure(text);
   const m = (file.name || "").match(/AF-([A-Z0-9]+)-F(\d+)/i);
-  if (m) parsed.isAF = true;
+  if (m) parsed.fromAFDB = parsed.hasPlddt = parsed.bFactors = true;
   return { parsed, afId: m ? { acc: m[1].toUpperCase(), frag: m[2] } : null };
 }

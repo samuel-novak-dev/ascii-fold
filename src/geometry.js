@@ -11,7 +11,7 @@ export const pbin = v => v > 90 ? 0 : v > 70 ? 1 : v > 50 ? 2 : 3;   // AlphaFol
 
 // ---------- shape parameters (Å) ----------
 // helices: a 2.2 Å wide, paper-thin oval ribbon; strands: flat 2 Å arrows
-export const SHAPE_DEFAULT = { hStyle: "ribbon", hW: 1.1, hT: 0.04, cylR: 2.3, sW: 1.0, sT: 0.2, flat: 1.0, arrows: true, head: 2.3, coilR: 0.48 };
+export const SHAPE_DEFAULT = { hW: 1.1, hT: 0.04, sW: 1.0, sT: 0.2, flat: 1.0, arrows: true, head: 2.3, coilR: 0.48 };
 
 function helixAxis(CA, s, e) {
   // per-residue axis points for helix run s..e (4-residue weighted average cancels the 3.6-residue turn)
@@ -28,7 +28,7 @@ function helixAxis(CA, s, e) {
   const stepF = sub(ax[f], ax[f + 1]), stepL = sub(ax[l], ax[l - 1]);
   for (let k = f - 1; k >= 0; k--) ax[k] = add(ax[k + 1], stepF);
   for (let k = l + 1; k < ax.length; k++) ax[k] = add(ax[k - 1], stepL);
-  // extra smoothing so cylinders run straight, ends pinned
+  // extra smoothing so the axis runs smoothly, ends pinned
   for (let pass = 0; pass < 4; pass++) {
     const sm = ax.map((v, k) => k === 0 || k === ax.length - 1 ? v : mul(add(add(ax[k - 1], mul(v, 2)), ax[k + 1]), 0.25));
     for (let k = 0; k < ax.length; k++) ax[k] = sm[k];
@@ -39,7 +39,7 @@ function helixAxis(CA, s, e) {
 export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
   const rows = parsed.rows;
   if (rows.length < 5) throw new Error("Too few residues to draw");
-  const N = rows.length, SH = { ...SHAPE_DEFAULT, ...shape }, cyl = SH.hStyle === "cylinder";
+  const N = rows.length, SH = { ...SHAPE_DEFAULT, ...shape };
   let CA0 = rows.map(r => r.CA);
   const cen = CA0.reduce((a, p) => add(a, p), [0, 0, 0]).map(v => v / N);
   CA0 = CA0.map(p => sub(p, cen));
@@ -59,7 +59,7 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
     CA = nx;
   }
 
-  // helix axes: the cylinders' path, and what keeps a helix ribbon's width parallel to its axis
+  // helix axes: what the ideal helices wind around, and what keeps a ribbon's width parallel to its axis
   const AX = new Array(N).fill(null), AD = new Array(N).fill(null);
   for (let i = 0; i < N;) {
     if (SS[i] !== "H") { i++; continue; }
@@ -77,7 +77,7 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
   // through the real Cα, so loops join exactly as before. Smoother than the data, on purpose;
   // helixRMSD says by how much.
   const HF = new Array(N).fill(null), helixRMSD = [];
-  if (!cyl) for (let i = 0; i < N;) {
+  for (let i = 0; i < N;) {
     if (SS[i] !== "H") { i++; continue; }
     let j = i; while (j + 1 < N && SS[j + 1] === "H") j++;
     if (j - i >= 3) {
@@ -122,12 +122,12 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
       : norm(add(add(mul(SIDE[i - 1], 0.25), mul(v, 0.5)), mul(SIDE[i + 1], 0.25))));
     for (let i = 0; i < N; i++) SIDE[i] = sm[i];
   }
-  // Helix ribbons, as in ChimeraX: width along the helix axis, so the band lies on the helix's
-  // cylinder and every turn is the same. (Carbonyl directions wobble residue to residue, which
+  // Helix ribbons, as in ChimeraX: width along the helix axis, so the band wraps round the helix
+  // like a spiral staircase and every turn is the same. (Carbonyl directions wobble residue to residue, which
   // twisted the band at odd angles.)
   for (let i = 0; i < N; i++) if (AD[i] && Math.hypot(...AD[i]) > 0.5) SIDE[i] = AD[i];
 
-  const rH = cyl ? SH.cylR : 2.1 * SH.hW, rE = Math.max(1.0, SH.sW * 1.35);
+  const rH = 2.1 * SH.hW, rE = Math.max(1.0, SH.sW * 1.35);
   const radOf = ss => ss === "H" ? rH : ss === "E" ? rE : 0.95;
   const catmull = (p0, p1, p2, p3, t) => {
     const t2 = t * t, t3 = t2 * t;
@@ -137,14 +137,10 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
   for (let i = 0; i < N - 1; i++) {
     const p0 = CA[Math.max(0, i - 1)], p1 = CA[i], p2 = CA[i + 1], p3 = CA[Math.min(N - 1, i + 2)];
     const gap = dist(CA0[i], CA0[i + 1]) > 4.3;
-    const inCyl = cyl && SS[i] === "H" && SS[i + 1] === "H";
     for (let s = 0; s < SUB; s++) {
       const t = s / SUB, hf = HF[i];
       let pos;
-      if (inCyl) pos = add(mul(AX[i], 1 - t), mul(AX[i + 1], t));
-      else if (cyl && SS[i] === "H") pos = add(mul(AX[i], 1 - t), mul(p2, t));        // leave the cylinder end
-      else if (cyl && SS[i + 1] === "H") pos = add(mul(p1, 1 - t), mul(AX[i + 1], t)); // enter the cylinder
-      else if (hf && HF[i + 1] === hf) {   // the ideal helix (an exact spiral round the smooth axis), eased in at the ends
+      if (hf && HF[i + 1] === hf) {   // the ideal helix (an exact spiral round the smooth axis), eased in at the ends
         const ax = catmull(AX[Math.max(hf.i, i - 1)], AX[i], AX[i + 1], AX[Math.min(hf.j, i + 2)], t);
         const T = norm(add(mul(AD[i], 1 - t), mul(AD[i + 1], t)));
         let u = add(mul(hf.U[i], 1 - t), mul(hf.U[i + 1], t)); u = norm(sub(u, mul(T, dot(u, T)))); const v = cross(T, u);
@@ -155,11 +151,10 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
       } else pos = catmull(p0, p1, p2, p3, t);
       const near = t < 0.5 ? i : i + 1;
       pts.push({ p: pos, r: radOf(SS[i]) * (1 - t) + radOf(SS[i + 1]) * t, ss: SS[near], pk: PB[near],
-                 side: norm(add(mul(SIDE[i], 1 - t), mul(SIDE[i + 1], t))), res: i, t, gap, cyl: inCyl });
+                 side: norm(add(mul(SIDE[i], 1 - t), mul(SIDE[i + 1], t))), res: i, t, gap });
     }
   }
-  const lastP = cyl && SS[N - 1] === "H" ? AX[N - 1] : CA[N - 1];
-  pts.push({ p: lastP, r: radOf(SS[N - 1]), ss: SS[N - 1], pk: PB[N - 1], side: SIDE[N - 1], res: N - 1, t: 0, gap: false, cyl: cyl && SS[N - 1] === "H" });
+  pts.push({ p: CA[N - 1], r: radOf(SS[N - 1]), ss: SS[N - 1], pk: PB[N - 1], side: SIDE[N - 1], res: N - 1, t: 0, gap: false });
 
   for (let k = 0; k < pts.length; k++) {
     const q = pts[k];
@@ -168,9 +163,14 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
     const S = norm(sub(q.side, mul(T, dot(q.side, T))));
     q.side = S; q.nrm = norm(cross(T, S));
     const i = q.res, t = q.t, own = SS[i], next = SS[Math.min(N - 1, i + 1)], prev = SS[Math.max(0, i - 1)];
+    // a helix ribbon's normal points out from the axis, toward the side chains, so the renderer
+    // can tell the outside of a turn (facing the viewer) from the inside (seen through the gaps)
+    if (own === "H" && AX[i]) {
+      const ax = AX[i + 1] && SS[i + 1] === "H" ? add(mul(AX[i], 1 - t), mul(AX[i + 1], t)) : AX[i];
+      if (dot(q.nrm, sub(q.p, ax)) < 0) q.nrm = mul(q.nrm, -1);
+    }
     let w = 0, th = 0;
-    if (q.cyl) { q.kind = "Hc"; q.wIn = q.wOut = 0; continue; }
-    if (own === "H" && !cyl) {   // full width inside the helix, tapering over its first and last residue
+    if (own === "H") {   // full width inside the helix, tapering over its first and last residue
       w = SH.hW * (next === "H" ? 1 : 1 - 0.7 * t) * (prev === "H" || i === 0 ? 1 : 0.3 + 0.7 * t);
       th = SH.hT;
     }
@@ -193,21 +193,25 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
   // every heavy atom, centred like the Cα, at its van der Waals radius (for the side-chain surface).
   // Files with only Cα (and O) have no side chains, and the surface falls back to one ball per residue.
   const nAt = rows.reduce((s, r) => s + (r.atoms ? r.atoms.length : 0), 0);
-  const AP = new Float32Array(nAt * 3), AR = new Float32Array(nAt), ARes = new Uint32Array(nAt);
+  const AP = new Float32Array(nAt * 3), AR = new Float32Array(nAt), ARes = new Uint32Array(nAt), AN = new Array(nAt), AE = new Array(nAt);
   let ai = 0, withSide = 0;
   rows.forEach((r, i) => {
     let side = false;
     for (const a of r.atoms || []) {
       AP[ai * 3] = a.p[0] - cen[0]; AP[ai * 3 + 1] = a.p[1] - cen[1]; AP[ai * 3 + 2] = a.p[2] - cen[2];
-      AR[ai] = VDW[a.e] || VDW_DEFAULT; ARes[ai] = i; ai++;
+      AR[ai] = VDW[a.e] || VDW_DEFAULT; ARes[ai] = i; AN[ai] = a.n; AE[ai] = a.e; ai++;
       if (!BACKBONE.has(a.n)) side = true;
     }
     if (side) withSide++;
   });
-  const atoms = { n: nAt, P: AP, R: AR, res: ARes, sideChains: withSide > N * 0.5 };
+  const atoms = { n: nAt, P: AP, R: AR, res: ARes, name: AN, el: AE, sideChains: withSide > N * 0.5 };
+  // where each residue sits on the cartoon (the spline point at its Cα): side chains hang from here
+  const anchor = new Array(N);
+  for (const q of pts) if (q.t === 0) anchor[q.res] = q.p;
 
   const plddts = rows.map(r => r.b || 0);
-  const hasPlddt = parsed.isAF || false;
+  // colour by B-factor ("pLDDT") whenever the file has varying B-factors; hasPlddt only labels them
+  const hasPlddt = !!parsed.hasPlddt, hasB = !!parsed.bFactors || hasPlddt;
   const meanP = plddts.reduce((a, b) => a + b, 0) / N;
-  return { pts, R, hasPlddt, N, meanP, ca: CA0, helixRMSD, ssRes: SS, pkRes: PB, atoms, resName: rows.map(r => r.name || "UNK"), resNum: rows.map(r => r.num), ssCounts: { H: SS.filter(s => s === "H").length, E: SS.filter(s => s === "E").length }, ssAuto: !parsed.ss };
+  return { pts, R, hasPlddt, hasB, fromAFDB: !!parsed.fromAFDB, N, meanP, ca: CA0, helixRMSD, ssRes: SS, pkRes: PB, atoms, anchor, resName: rows.map(r => r.name || "UNK"), resNum: rows.map(r => r.num), ssCounts: { H: SS.filter(s => s === "H").length, E: SS.filter(s => s === "E").length }, ssAuto: !parsed.ss };
 }

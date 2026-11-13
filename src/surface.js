@@ -131,9 +131,8 @@ export function meshAO(mesh) {
 }
 
 /** The ray casting behind meshAO, for any mesh and any "is this point inside something" test.
- *  sheet (optional, per vertex): 1 for a two-sided sheet, which is lit from both sides.
  *  Rays start LIFT Å off the surface and take STEPS steps of STEP Å. */
-export function rayAO(P, N, nv, inside, sheet = null, { LIFT = 0.7, STEP = 1.25, STEPS = 9 } = {}) {
+export function rayAO(P, N, nv, inside, { LIFT = 0.7, STEP = 1.25, STEPS = 9 } = {}) {
   const K = 40, dirs = [], golden = Math.PI * (3 - Math.sqrt(5));
   for (let j = 0; j < K; j++) {
     const y = 1 - 2 * (j + 0.5) / K, r = Math.sqrt(1 - y * y), ph = j * golden;
@@ -153,7 +152,7 @@ export function rayAO(P, N, nv, inside, sheet = null, { LIFT = 0.7, STEP = 1.25,
     return all ? open / all : 1;
   };
   const ao = new Float32Array(nv);
-  for (let v = 0; v < nv; v++) ao[v] = sheet && sheet[v] ? (side(v, 1) + side(v, -1)) / 2 : side(v, 1);
+  for (let v = 0; v < nv; v++) ao[v] = side(v, 1);
   return ao;
 }
 

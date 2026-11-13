@@ -44,13 +44,14 @@
     <section>
       <h3>Show</h3>
       <div class="seg" id="surface"><button data-v="off" class="on">Cartoon</button><button data-v="on">Surface</button></div>
+      <div class="seg" id="sidechains" title="Side chains as sticks, with the cartoon; Selected follows the sequence selection"><button data-v="off" class="on">No side chains</button><button data-v="sel">Selected</button><button data-v="all">All</button></div>
       <div class="seg grid2" id="layout"><button data-v="lr" class="on">Text → model</button><button data-v="rl">Model → text</button><button data-v="ascii">Text only</button><button data-v="ribbon">Model only</button></div>
     </section>
 
     <section>
       <h3>Colour <span id="colourTarget" class="target">all</span></h3>
       <div class="seg" id="pickSS" role="group" aria-label="Select by structure"><button data-v="H" title="Select every helix residue (Shift adds)">Helices</button><button data-v="E" title="Select every strand residue (Shift adds)">Strands</button><button data-v="C" title="Select every loop residue (Shift adds)">Loops</button></div>
-      <div class="seg" id="colour"><button data-v="ss" class="on">Structure</button><button data-v="plddt" id="plddtBtn" disabled>pLDDT</button></div>
+      <div class="seg" id="colour"><button data-v="ss" class="on">Structure</button><button data-v="plddt" id="plddtBtn" disabled title="Colour by the B-factor column (pLDDT in predicted models)">pLDDT</button></div>
       <div class="swatches" id="swatches" role="group" aria-label="Colours"></div>
       <button type="button" class="link" id="moreCol" aria-expanded="false">More colours</button>
       <div class="swatches basic" id="moreSwatches" role="group" aria-label="ChimeraX basic colours" hidden></div>
@@ -63,13 +64,14 @@
       <div class="seg" id="detail"><button data-v="xcoarse">X-coarse</button><button data-v="coarse">Coarse</button><button data-v="medium" class="on">Medium</button></div>
       <label class="slider"><span>Spin</span><input id="speed" type="range" min="0" max="100" value="0"></label>
       <label class="slider"><span>Perspective</span><input id="persp" type="range" min="0" max="100" value="100"></label>
+      <label class="slider"><span>Depth</span><input id="depth" type="range" min="0" max="100" value="60" title="How dark the back-most parts get; the front always stays full colour"></label>
+      <div class="seg" id="faces" title="Lighten helix turns facing you, darken the far side seen through them"><button data-v="off" class="on">Helix faces off</button><button data-v="on">On</button></div>
     </section>
 
     <details id="more">
       <summary>Glyphs and shape</summary>
       <div class="seg" id="glyphs"><button data-v="classic" class="on">Classic</button><button data-v="blocks">Blocks</button><button data-v="geo">Geo</button></div>
       <p class="gl"><i class="sw h"></i>Helix</p>
-      <div class="seg" id="hStyle"><button data-v="ribbon" class="on">Ribbon</button><button data-v="cylinder">Cylinder</button></div>
       <label class="slider"><span>Width</span><input id="hW" type="range" min="50" max="250" value="110"></label>
       <label class="slider" id="hTwrap"><span>Thickness</span><input id="hT" type="range" min="4" max="120" value="4"></label>
       <p class="gl"><i class="sw e"></i>Strand</p>

@@ -1,14 +1,17 @@
-// Draws the model (the cartoon mesh or the molecular surface mesh) with WebGL, lit like ChimeraX's
-// "lighting gentle": smooth per-pixel shading, mostly ambient light darkened by ambient occlusion,
-// a little key light, no highlight, and depth cueing only in the back half. With WebGL2 it renders
+// Draws the model with WebGL. The molecular surface is lit like ChimeraX's "lighting gentle":
+// smooth per-pixel shading, mostly ambient light darkened by ambient occlusion, a little key
+// light, no highlight, and depth cueing only in the back half. The cartoon keeps every helix and
+// strand one even colour that darkens with distance from the camera along the line of sight
+// (loops keep a touch of roundness); optionally a helix's outside turns (toward the side chains)
+// are lightened and its inside (seen through the gaps) darkened. With WebGL2 it renders
 // into an antialiased offscreen buffer, then outlines every depth jump, like ChimeraX's silhouettes.
 // The projection matches the 2D renderer (same rotation, perspective, pan and zoom), so the result
 // is drawn straight into the model canvas.
 
 const VS = `
-attribute vec3 a_pos; attribute vec3 a_nrm; attribute vec3 a_col; attribute float a_ao;
+attribute vec3 a_pos; attribute vec3 a_nrm; attribute vec3 a_col; attribute float a_ao; attribute float a_band; attribute float a_face;
 uniform mat3 u_rot; uniform float u_kz, u_kpx, u_R; uniform vec2 u_pan, u_O, u_size;
-varying vec3 v_n, v_col, v_view; varying float v_ao, v_dt;
+varying vec3 v_n, v_col, v_view; varying float v_ao, v_dt, v_dist, v_band, v_face;
 void main() {
   vec3 v = u_rot * a_pos;
   float sc = 1.0 / max(0.3, 1.0 - u_kz * v.z);
@@ -17,16 +20,27 @@ void main() {
   v_n = u_rot * a_nrm; v_col = a_col; v_ao = a_ao;
   v_dt = clamp((v.z + u_R) / (2.0 * u_R), 0.0, 1.0);                         // 0 at the back, 1 at the front
   v_view = u_kz > 0.0 ? vec3(0.0, 0.0, 1.0 / u_kz) - v : vec3(0.0, 0.0, 1.0);
+  v_dist = u_kz > 0.0 ? length(v_view) : -v.z;   // distance to the camera (orthographic: depth)
+  v_band = a_band; v_face = a_face;
 }`;
 
 const FS = `
 precision mediump float;
-uniform vec3 u_key, u_bg; uniform float u_fog;
-varying vec3 v_n, v_col, v_view; varying float v_ao, v_dt;
+uniform vec3 u_key, u_bg; uniform float u_fog, u_mode, u_depth, u_faces; uniform vec2 u_drange;
+varying vec3 v_n, v_col, v_view; varying float v_ao, v_dt, v_dist, v_band, v_face;
 void main() {
   vec3 n = normalize(v_n);
-  if (dot(n, v_view) < 0.0) n = -n;                       // two-sided, always facing the viewer
+  float facing = dot(n, v_view);                           // the mesh's own normal: > 0 when its front faces us
+  if (facing < 0.0) n = -n;                                // two-sided, always facing the viewer
   float key = max(dot(n, u_key), 0.0);
+  if (u_mode > 0.5) {   // cartoon: even colour per element, darker further from the camera
+    // 0 at the model's front-most point in this view, 1 at its back-most: the front stays full colour
+    float dc = clamp((v_dist - u_drange.x) / max(1e-3, u_drange.y - u_drange.x), 0.0, 1.0);
+    vec3 c = v_col * (1.0 - u_depth * dc) * mix(0.8 + 0.2 * key, 1.0, v_band);
+    if (u_faces > 0.5 && v_face != 0.0) c = v_face * facing >= 0.0 ? mix(c, vec3(1.0), 0.16) : c * 0.58;   // helix outside / inside
+    gl_FragColor = vec4(c, 1.0);
+    return;
+  }
   vec3 c = v_col * (0.82 * (0.25 + 0.95 * v_ao) + 0.22 * key);
   float fog = clamp((0.5 - v_dt) / 0.5, 0.0, 1.0) * u_fog;   // ChimeraX-style: back half only
   gl_FragColor = vec4(mix(c, u_bg, fog), 1.0);
@@ -71,12 +85,14 @@ export function createGLView() {
 
   // one set of buffers per mesh slot ("cartoon", "surface"), so switching doesn't re-upload
   const slots = {};
-  const slot = name => slots[name] || (slots[name] = { pos: gl.createBuffer(), nrm: gl.createBuffer(), col: gl.createBuffer(), ao: gl.createBuffer(),
+  const slot = name => slots[name] || (slots[name] = { pos: gl.createBuffer(), nrm: gl.createBuffer(), col: gl.createBuffer(), ao: gl.createBuffer(), band: gl.createBuffer(), face: gl.createBuffer(),
                                                         idx: gl.createBuffer(), mesh: null, count: 0, idxType: gl.UNSIGNED_SHORT });
   function setMesh(name, m) {
     const s = slot(name); s.mesh = m;
     gl.bindBuffer(gl.ARRAY_BUFFER, s.pos); gl.bufferData(gl.ARRAY_BUFFER, m.P, gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, s.nrm); gl.bufferData(gl.ARRAY_BUFFER, m.N, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, s.band); gl.bufferData(gl.ARRAY_BUFFER, m.band || new Float32Array(m.nv), gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, s.face); gl.bufferData(gl.ARRAY_BUFFER, m.face || new Float32Array(m.nv), gl.STATIC_DRAW);
     setAO(name, null);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, s.idx);
     if (m.nv > 65535 && !uintIdx) {   // no 32-bit indices: draw what fits rather than nothing
@@ -110,28 +126,34 @@ export function createGLView() {
     return fb = { W, H, ms, rs, msC, msD, col, dep };
   }
 
-  // p: { W, H, rot (3×3 column-major), kz, kpx, R, pan, O, key (view space), bg [r, g, b] 0–1, fog, ink [r, g, b] 0–1, edge: px or 0 }
-  function render(p, name) {
+  // p: { W, H, rot (3×3 column-major), kz, kpx, R, pan, O, key (view space), bg [r, g, b] 0–1, fog, ink [r, g, b] 0–1,
+  //      edge: px or 0, mode: 0 lit surface, 1 depth-shaded cartoon, depth: darkening at the back 0–1, faces: bool,
+  //      drange: [nearest, farthest] camera distance of the model in this view }
+  function render(p, names) {   // names: one mesh slot or several, drawn together into one depth buffer
     if (canvas.width !== p.W || canvas.height !== p.H) { canvas.width = p.W; canvas.height = p.H; }
-    const s = slots[name], outline = gl2 && p.edge > 0;
-    const target = outline ? buffers(p.W, p.H) : null;
+    const list = (Array.isArray(names) ? names : [names]).map(n => slots[n]).filter(s => s && s.mesh && s.count);
+    const outline = gl2 && p.edge > 0, target = outline ? buffers(p.W, p.H) : null;
     gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.ms : null);
     gl.viewport(0, 0, p.W, p.H);
     gl.clearColor(0, 0, 0, 0); gl.clearDepth(1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    if (s && s.mesh && s.count) {
+    if (list.length) {
       gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.disable(gl.CULL_FACE);
       gl.useProgram(prog);
-      const attr = (an, b, size, type, normalized) => { const l = A(an); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, size, type, normalized, 0, 0); };
-      attr("a_pos", s.pos, 3, gl.FLOAT, false); attr("a_nrm", s.nrm, 3, gl.FLOAT, false);
-      attr("a_col", s.col, 3, gl.UNSIGNED_BYTE, true); attr("a_ao", s.ao, 1, gl.FLOAT, false);
       gl.uniformMatrix3fv(U(prog, "u_rot"), false, p.rot);
       gl.uniform1f(U(prog, "u_kz"), p.kz); gl.uniform1f(U(prog, "u_kpx"), p.kpx); gl.uniform1f(U(prog, "u_R"), p.R);
       gl.uniform2fv(U(prog, "u_pan"), p.pan); gl.uniform2fv(U(prog, "u_O"), p.O); gl.uniform2f(U(prog, "u_size"), p.W, p.H);
-      gl.uniform3fv(U(prog, "u_key"), p.key); gl.uniform3fv(U(prog, "u_bg"), p.bg); gl.uniform1f(U(prog, "u_fog"), p.fog);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, s.idx);
-      gl.drawElements(gl.TRIANGLES, s.count, s.idxType, 0);
-      for (const an of ["a_pos", "a_nrm", "a_col", "a_ao"]) gl.disableVertexAttribArray(A(an));
+      gl.uniform3fv(U(prog, "u_key"), p.key); gl.uniform3fv(U(prog, "u_bg"), p.bg); gl.uniform1f(U(prog, "u_fog"), p.fog); gl.uniform1f(U(prog, "u_mode"), p.mode || 0);
+      gl.uniform1f(U(prog, "u_depth"), p.depth ?? 0.55); gl.uniform1f(U(prog, "u_faces"), p.faces ? 1 : 0);
+      gl.uniform2fv(U(prog, "u_drange"), p.drange || [0, 1]);
+      const attr = (an, b, size, type, normalized) => { const l = A(an); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, size, type, normalized, 0, 0); };
+      for (const s of list) {
+        attr("a_pos", s.pos, 3, gl.FLOAT, false); attr("a_nrm", s.nrm, 3, gl.FLOAT, false);
+        attr("a_col", s.col, 3, gl.UNSIGNED_BYTE, true); attr("a_ao", s.ao, 1, gl.FLOAT, false); attr("a_band", s.band, 1, gl.FLOAT, false); attr("a_face", s.face, 1, gl.FLOAT, false);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, s.idx);
+        gl.drawElements(gl.TRIANGLES, s.count, s.idxType, 0);
+      }
+      for (const an of ["a_pos", "a_nrm", "a_col", "a_ao", "a_band", "a_face"]) gl.disableVertexAttribArray(A(an));
     }
     if (target) {   // resolve, then outline into the canvas
       gl.bindFramebuffer(gl.READ_FRAMEBUFFER, target.ms); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, target.rs);

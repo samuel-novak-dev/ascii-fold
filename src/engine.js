@@ -6,7 +6,8 @@ import KRAS_6GJ8 from "./data/kras-6gj8.js";
 import { GIFEncoder, quantize, applyPalette } from "./vendor/gifenc.js";
 import { surfaceMesh, meshAO, meshPoints, RES_BALL } from "./surface.js";
 import { createGLView } from "./glview.js";
-import { cartoonMesh, cartoonAO } from "./cartoon.js";
+import { cartoonMesh } from "./cartoon.js";
+import { sideChainMesh, ELEMENT_RGB } from "./sticks.js";
 
 // ---------------------------------------------------------------------------------------
 // createAsciiFold(container, options) → view
@@ -50,7 +51,7 @@ export function solidColour(v) {
 export const DETAIL = { xcoarse: 32, coarse: 46, medium: 64 };   // text rows; columns follow width
 export const DEFAULTS = {
   theme: "paper", colour: "ss", layout: "lr", glyphs: "classic", detail: "medium",
-  perspective: 1, surface: false,
+  perspective: 1, surface: false, depth: 0.6, faces: false, sidechains: "none",
   spin: 0, blendFrom: 0.4, blendTo: 0.6, interactive: true, background: true, palette: null,
   font: '"JetBrains Mono", "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace',
 };
@@ -84,6 +85,7 @@ const turn = (aboutY, aboutX, M) => {   // rotate about the screen's vertical, t
   return [...r0, ...r1, ...cross(r0, r1)];
 };
 const HOME = rotMat(0.6, -0.35);
+const clamp01 = v => Math.max(0, Math.min(1, +v || 0));
 const fogOf = dt => Math.max(0, Math.min(1, (0.5 - dt) / 0.5));
 const hex = h => { h = h.trim().replace("#", ""); return [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16)); };
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / Math.max(1e-6, b - a))); return t * t * (3 - 2 * t); };
@@ -181,14 +183,14 @@ export function createAsciiFold(container, options = {}) {
   // Every residue gets one colour: the overall mode (SS, pLDDT or one colour) unless the sequence
   // panel recoloured it. colours() turns that into a short list of distinct colours plus each
   // residue's index into it, which the text, ribbon and surface all draw from.
-  const colourMode = () => o.colour === "plddt" ? (G && G.hasPlddt ? "plddt" : "ss") : SOLID ? "solid" : "ss";
+  const colourMode = () => o.colour === "plddt" ? (G && G.hasB ? "plddt" : "ss") : SOLID ? "solid" : "ss";   // "plddt": the B-factor column
   function colours() {
     const mode = colourMode(), css = PAL.css;
     const key = [mode, css.H, css.E, css.C, css.P.join(), SOLID && SOLID.css, ovrVer, geomId].join("|");
     if (ctab && ctab.key === key) return ctab;
     const list = [], idx = new Map(), rc = new Uint8Array(G.N);
     const add = c => { if (!idx.has(c)) { idx.set(c, list.length); list.push({ css: c, rgb: hex(c) }); } return idx.get(c); };
-    const byMode = (m, i) => m === "plddt" && G.hasPlddt ? css.P[G.pkRes[i]] : m === "solid" ? SOLID.css : css[G.ssRes[i]];
+    const byMode = (m, i) => m === "plddt" && G.hasB ? css.P[G.pkRes[i]] : m === "solid" ? SOLID.css : css[G.ssRes[i]];
     for (let i = 0; i < G.N; i++) {
       const v = ovr.get(i);
       rc[i] = add(v === undefined ? byMode(mode, i) : v === "ss" || v === "plddt" ? byMode(v, i) : v);
@@ -275,30 +277,11 @@ export function createAsciiFold(container, options = {}) {
     if (o.layout !== "ascii" && !o.surface && !gl3d) {   // fallback: the cartoon painted in 2D
       const SN = new Array(pts.length), NN = new Array(pts.length);
       for (let k = 0; k < pts.length; k++) { SN[k] = rot(pts[k].side); NN[k] = rot(pts[k].nrm); }
-      let cylRun = null;
-      const flushCyl = () => {
-        if (!cylRun || cylRun.path.length < 2) { cylRun = null; return; }
-        const path = cylRun.path, zc = cylRun.z / cylRun.n, cue = Math.max(0, Math.min(1, (zc + R) / (2 * R)));
-        const a = path[0], b = path[path.length - 1];
-        let nx = -(b[1] - a[1]), ny = b[0] - a[0]; const nl = Math.hypot(nx, ny) || 1; nx /= nl; ny /= nl;
-        if (nx * -LIGHT[0] + ny * LIGHT[1] > 0) { nx = -nx; ny = -ny; }
-        const w = 2 * shape.cylR * kpx * scl(zc), col = cylRun.col;
-        polys.push({ z: zc, cyl: path, w, off: [nx * w * 0.2, ny * w * 0.2],
-                     c0: sh(col, 0.3, cylRun.ao / cylRun.n, cue), c1: sh(col, 0.62, cylRun.ao / cylRun.n, cue), c2: sh(col, 0.95, cylRun.ao / cylRun.n, cue) });
-        cylRun = null;
-      };
       for (let k = 0; k < pts.length - 1; k++) {
         const a = pts[k], b = pts[k + 1];
-        if (a.gap) { flushCyl(); continue; }
+        if (a.gap) continue;
         const A = P[k], B = P[k + 1], zc = (A[2] + B[2]) / 2, cue = Math.max(0, Math.min(1, (zc + R) / (2 * R)));
-        if (a.kind === "Hc" && b.kind === "Hc") {
-          if (cylRun && cylRun.col !== baseOf(a)) flushCyl();   // a recoloured stretch starts its own cylinder
-          if (!cylRun) cylRun = { path: [[X(A), Y(A)]], z: 0, n: 0, ao: 0, col: baseOf(a) };
-          cylRun.path.push([X(B), Y(B)]); cylRun.z += zc; cylRun.n++; cylRun.ao += aoMid(k);
-          continue;
-        }
-        flushCyl();
-        if (a.kind === "C" || a.kind === "Hc" || a.wOut === 0) {
+        if (a.kind === "C" || a.wOut === 0) {
           polys.push({ z: zc, line: [X(A), Y(A), X(B), Y(B)], w: 2 * shape.coilR * kpx * scl(zc), c: sh(baseOf(a), 0.55, aoMid(k), cue) });
           continue;
         }
@@ -319,19 +302,13 @@ export function createAsciiFold(container, options = {}) {
           }
         }
       }
-      flushCyl();
       polys.sort((p, q) => p.z - q.z);
     }
     rctx.setTransform(1, 0, 0, 1, 0, 0);
     rctx.clearRect(0, 0, rib.width, rib.height);
     rctx.lineJoin = "round"; rctx.lineCap = "round";
     for (const p of polys) {
-      if (p.cyl) {
-        const trace = (dx, dy) => { rctx.beginPath(); rctx.moveTo(p.cyl[0][0] + dx, p.cyl[0][1] + dy); for (let m = 1; m < p.cyl.length; m++) rctx.lineTo(p.cyl[m][0] + dx, p.cyl[m][1] + dy); };
-        rctx.strokeStyle = p.c0; rctx.lineWidth = p.w; trace(0, 0); rctx.stroke();
-        rctx.strokeStyle = p.c1; rctx.lineWidth = p.w * 0.78; trace(p.off[0] * 0.5, p.off[1] * 0.5); rctx.stroke();
-        rctx.strokeStyle = p.c2; rctx.lineWidth = p.w * 0.3; trace(p.off[0] * 1.6, p.off[1] * 1.6); rctx.stroke();
-      } else if (p.line) {
+      if (p.line) {
         rctx.strokeStyle = p.c; rctx.lineWidth = p.w;
         rctx.beginPath(); rctx.moveTo(p.line[0], p.line[1]); rctx.lineTo(p.line[2], p.line[3]); rctx.stroke();
       } else {
@@ -417,8 +394,7 @@ export function createAsciiFold(container, options = {}) {
 
   // ---------- 3D text: glyphs printed on the cartoon's own surfaces ----------
   // The text takes the ribbon's shape: helices are twisting bands and strands flat arrows, with
-  // glyphs on both faces and along the edges; loops are thin tubes (so are helices in cylinder
-  // mode). Glyphs sit about one spacing apart. Each frame they're rotated with the model, dropped
+  // glyphs on both faces and along the edges; loops are thin tubes. Glyphs sit about one spacing apart. Each frame they're rotated with the model, dropped
   // when they face away or a nearer surface covers them, sized by perspective, fogged by depth,
   // laid in the surface's tangent plane (so they foreshorten as it turns away) and drawn back to
   // front.
@@ -428,8 +404,7 @@ export function createAsciiFold(container, options = {}) {
   // at both ends (the same numbers the cartoon uses, so text and ribbon line up exactly)
   function segShape(k) {
     const a = G.pts[k], b = G.pts[k + 1];
-    if (a.kind === "C" || a.kind === "Hc" || a.wOut === 0)
-      return { tube: true, r: a.kind === "Hc" ? shape.cylR : shape.coilR, ss: a.kind === "Hc" ? "H" : "C" };
+    if (a.kind === "C" || a.wOut === 0) return { tube: true, r: shape.coilR, ss: "C" };
     return { tube: false, ss: a.kind, wa: a.wOut, wb: (b.res === a.res || b.kind === a.kind) ? b.wIn : 0.04,
              ha: a.th, hb: b.kind === a.kind ? b.th : a.th };
   }
@@ -500,7 +475,7 @@ export function createAsciiFold(container, options = {}) {
         const t = L > 1e-6 ? (next - acc) / L : 0, u = 1 - t;
         const c = add(mul(a.p, u), mul(b.p, t));
         const e1 = norm(add(mul(a.side, u), mul(b.side, t))), e2 = norm(add(mul(a.nrm, u), mul(b.nrm, t)));
-        if (g.tube) {           // ring around a loop (or a cylinder helix)
+        if (g.tube) {           // ring around a loop
           const m = Math.max(4, Math.round(2 * Math.PI * g.r / dr)), off = (row & 1) * 0.5;
           for (let j = 0; j < m; j++) {
             const th = 2 * Math.PI * (j + off) / m, n = add(mul(e1, Math.cos(th)), mul(e2, Math.sin(th)));
@@ -532,6 +507,17 @@ export function createAsciiFold(container, options = {}) {
     if (!cartState || cartState.id !== geomId) cartState = { id: geomId, m: cartoonMesh(G, shape), colKey: "", aoOn: false };
     return cartState.m;
   }
+  // side chains: null (none), "all", or a Set of residue indices; drawn with the cartoon, not the surface
+  let scShow = null, stickState = null;
+  const setSideChains = w => { scShow = w === "all" ? "all" : (w && typeof w !== "string") ? new Set(w) : null; };
+  setSideChains(o.sidechains);
+  function stickMesh() {
+    if (!scShow || o.surface) return null;
+    const key = geomId + "|" + (scShow === "all" ? "all" : [...scShow].sort((a, b) => a - b).join(","));
+    if (!stickState || stickState.key !== key)
+      stickState = { key, m: sideChainMesh(G, scShow === "all" ? () => true : r => scShow.has(r)), colKey: "" };
+    return stickState.m.nv ? stickState.m : null;
+  }
   function view3d() {
     if (glv === undefined) { try { glv = createGLView(); } catch { glv = null; } }
     return glv;
@@ -546,11 +532,33 @@ export function createAsciiFold(container, options = {}) {
       for (let i = 0; i < m.nv; i++) { const c = t.list[t.rc[m.res[i]]].rgb; rgb[i * 3] = c[0]; rgb[i * 3 + 1] = c[1]; rgb[i * 3 + 2] = c[2]; }
       v.setColours(name, rgb); st.colKey = t.key;
     }
-    if (!st.aoOn) { v.setAO(name, o.surface ? meshAO(m) : cartoonAO(m)); st.aoOn = true; }
-    const M = F.Rm;
+    if (!st.aoOn) { if (o.surface) v.setAO(name, meshAO(m)); st.aoOn = true; }   // the cartoon is shaded by depth instead
+    const names = [name], sm = o.surface ? null : stickMesh();
+    if (sm) {   // side chains: carbons in the residue's colour, N / O / S by element
+      if (v.mesh("sticks") !== sm) { v.setMesh("sticks", sm); stickState.colKey = ""; }
+      if (stickState.colKey !== t.key) {
+        const rgb = new Uint8Array(sm.nv * 3);
+        for (let i = 0; i < sm.nv; i++) { const c = ELEMENT_RGB[sm.el[i]] || t.list[t.rc[sm.res[i]]].rgb; rgb[i * 3] = c[0]; rgb[i * 3 + 1] = c[1]; rgb[i * 3 + 2] = c[2]; }
+        v.setColours("sticks", rgb); stickState.colKey = t.key;
+      }
+      names.push("sticks");
+    }
+    const M = F.Rm, cam = F.kz > 0 ? 1 / F.kz : 0;
+    // the model's nearest and farthest distance from the camera in this view (every 3rd vertex is plenty)
+    let dn = Infinity, df = -Infinity;
+    for (const mm of sm ? [m, sm] : [m]) {
+      const P = mm.P;
+      for (let i = 0; i < mm.nv; i += 3) {
+        const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
+        const vx = M[0] * x + M[1] * y + M[2] * z, vy = M[3] * x + M[4] * y + M[5] * z, vz = M[6] * x + M[7] * y + M[8] * z;
+        const d = cam ? Math.hypot(vx, vy, cam - vz) : -vz;
+        if (d < dn) dn = d; if (d > df) df = d;
+      }
+    }
     const c = v.render({ W: rib.width, H: rib.height, rot: [M[0], M[3], M[6], M[1], M[4], M[7], M[2], M[5], M[8]],   // column-major
       kz: F.kz, kpx: F.kpx, R: F.R, pan: [panX, panY], O: [F.OX, F.OY], key: LIGHT,
-      bg: PAL.paper.map(x => x / 255), fog: 0.75, ink: [0.08, 0.08, 0.08], edge: Math.max(1, 1.25 * F.dpr) }, name);
+      bg: PAL.paper.map(x => x / 255), ink: [0.08, 0.08, 0.08], edge: Math.max(1, 1.25 * F.dpr), mode: o.surface ? 0 : 1,
+      depth: 0.9 * clamp01(o.depth), fog: Math.min(1, 1.25 * clamp01(o.depth)), faces: !!o.faces, drange: [dn, df] }, names);   // depth: the Depth slider
     rctx.setTransform(1, 0, 0, 1, 0, 0);
     rctx.drawImage(c, 0, 0);
   }
@@ -815,8 +823,8 @@ export function createAsciiFold(container, options = {}) {
     G = buildGeometry(parsed, shape); geomId++;
     ovr.clear(); ovrVer++;
     lastParsed = parsed;
-    info = { title: meta.title || parsed.title || "Structure", sub: meta.sub || "", residues: G.N, meanPlddt: G.hasPlddt ? G.meanP : null,
-             hasPlddt: G.hasPlddt, ssFromGeometry: G.ssAuto, chain: parsed.chain, entryUrl: meta.entryUrl || null, acc: meta.acc || null };
+    info = { title: meta.title || parsed.title || "Structure", sub: meta.sub || "", residues: G.N, meanPlddt: G.hasPlddt ? G.meanP : null, meanB: G.hasB ? G.meanP : null,
+             hasPlddt: G.hasPlddt, hasB: G.hasB, fromAFDB: G.fromAFDB || !!meta.entryUrl, ssFromGeometry: G.ssAuto, chain: parsed.chain, entryUrl: meta.entryUrl || null, acc: meta.acc || null };
     root.setAttribute("aria-label", `${info.title}: rotating protein structure drawn as text and ribbon`);
     resetView(true);
     emit("load", info);
@@ -833,6 +841,7 @@ export function createAsciiFold(container, options = {}) {
     set(opts = {}) {
       const needsFit = "detail" in opts && opts.detail !== o.detail;
       Object.assign(o, opts);
+      if ("sidechains" in opts) setSideChains(opts.sidechains);
       if (opts.shape) api.setShape(opts.shape);
       applyStyle();
       if (needsFit) fit();
@@ -933,6 +942,8 @@ export function createAsciiFold(container, options = {}) {
       for (const i of indices) if (c === null) ovr.delete(i); else ovr.set(i, c);
       ovrVer++; kick(); emit("colour"); return api;
     },
+    /** Show side chains as sticks: "all", an array of residue indices, or null for none. */
+    showSideChains(which) { setSideChains(which); kick(); return api; },
     /** Drop all per-residue colours. */
     clearResidueColours() { ovr.clear(); ovrVer++; kick(); emit("colour"); return api; },
     on(ev, fn) { (listeners[ev] = listeners[ev] || []).push(fn); return () => { listeners[ev] = listeners[ev].filter(f => f !== fn); }; },

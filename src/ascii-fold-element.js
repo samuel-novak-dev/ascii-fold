@@ -8,12 +8,14 @@ import { createAsciiFold } from "./engine.js";
 //   theme         paper | night                      colour      ss | plddt | a ChimeraX colour name or hex
 //   layout        lr | rl | ascii | ribbon
 //   perspective   0–1 (default 1; 0 = orthographic)
+//   depth         0–1, how much darker the back of the model gets (default 0.6)
+//   helix-faces   lighten helix turns facing the viewer, darken their insides (attribute present = on)
+//   sidechains    all | none: side chains as sticks with the cartoon
 //   surface       show the molecular surface instead of the cartoon (attribute present = on)
 //   glyphs        classic | blocks | geo | <custom ramp, light → dark>
 //   detail        xcoarse | coarse | medium | <rows>
 //   spin          rotation speed, 0–1 (default 0: still)
 //   blend-from / blend-to   where the text→ribbon blend starts/ends, 0–1
-//   helix-style   ribbon | cylinder
 //   interactive   "false" disables drag / zoom
 //   transparent   no background fill
 //   no-credit     hide the AlphaFold DB attribution (please credit it elsewhere if you do)
@@ -26,10 +28,12 @@ const OPTION_ATTRS = {
   glyphs: v => ({ glyphs: v }),
   surface: v => ({ surface: v !== null && v !== "false" }),
   perspective: v => ({ perspective: Math.max(0, Math.min(1, parseFloat(v) || 0)) }),
+  depth: v => ({ depth: Math.max(0, Math.min(1, parseFloat(v) || 0)) }),
+  sidechains: v => ({ sidechains: v === "all" ? "all" : "none" }),
+  "helix-faces": v => ({ faces: v !== null && v !== "false" }),
   detail: v => ({ detail: /^\d+$/.test(v) ? +v : v }),
   spin: v => ({ spin: parseFloat(v) || 0 }),
   "blend-from": v => ({ blendFrom: parseFloat(v) }), "blend-to": v => ({ blendTo: parseFloat(v) }),
-  "helix-style": v => ({ shape: { hStyle: v } }),
   interactive: v => ({ interactive: v !== "false" }),
   transparent: v => ({ background: v === null }),
 };
@@ -82,7 +86,7 @@ export class AsciiFoldElement extends HTMLElement {
     this.view.on("load", info => {
       const p = this.view.palette();
       this._credit.style.color = p.ink;
-      this._credit.innerHTML = this.hasAttribute("no-credit") || !info.hasPlddt ? ""
+      this._credit.innerHTML = this.hasAttribute("no-credit") || !info.fromAFDB ? ""
         : info.entryUrl ? `<a href="${info.entryUrl}" target="_blank" rel="noopener">AlphaFold DB</a> · CC BY 4.0` : "AlphaFold DB · CC BY 4.0";
       this.dispatchEvent(new CustomEvent("fold-load", { detail: info }));
     });

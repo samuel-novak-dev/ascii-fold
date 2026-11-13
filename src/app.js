@@ -14,14 +14,14 @@ view.on("load", info => {
   $("title").textContent = info.title;
   const bits = [info.sub, `${info.residues} residues`];
   if (info.hasPlddt) bits.push(`mean pLDDT ${info.meanPlddt.toFixed(1)}`);
-  if (info.ssFromGeometry) bits.push("SS from Cα geometry");
+  else if (info.hasB) bits.push(`mean B-factor ${info.meanB.toFixed(1)}`);
   $("sub").textContent = bits.filter(Boolean).join(" · ");
-  $("plddtBtn").disabled = !info.hasPlddt;
-  if (!info.hasPlddt && view.options.colour === "plddt") { view.set({ colour: "ss" }); markColour("ss"); renderLegend(); }
+  $("plddtBtn").disabled = !info.hasB;   // colours by the B-factor column, whatever made the file
+  if (!info.hasB && view.options.colour === "plddt") { view.set({ colour: "ss" }); markColour("ss"); renderLegend(); }
   buildSequence();
   $("credit").innerHTML = info.entryUrl
     ? `Structure: <a href="${info.entryUrl}" target="_blank" rel="noopener">AlphaFold DB</a> (CC BY 4.0)`
-    : info.hasPlddt ? "Structure: AlphaFold DB (CC BY 4.0)" : "";
+    : info.fromAFDB ? "Structure: AlphaFold DB (CC BY 4.0)" : "";
 });
 
 // ---------- loading: open or drop a .pdb / .cif file ----------
@@ -52,12 +52,18 @@ function seg(id, fn) {
   $(id).addEventListener("click", e => { const b = e.target.closest("button"); if (!b || b.disabled) return; setSeg(id, b.dataset.v); });
 }
 seg("surface", v => view.set({ surface: v === "on" }));
+// side chains: none, the residues selected in the sequence (kept in step with it), or all
+let scMode = "off";
+const syncSideChains = () => view.showSideChains(scMode === "all" ? "all" : scMode === "sel" ? [...sel] : null);
+seg("sidechains", v => { scMode = v; syncSideChains(); });
 seg("layout", v => view.set({ layout: v }));
 seg("theme", v => { document.body.classList.toggle("night", v === "night"); view.set({ theme: v }); renderLegend(); paintSequence(); });
 seg("detail", v => view.set({ detail: v }));
 seg("glyphs", v => view.set({ glyphs: v }));
 $("speed").oninput = e => setSpin(+e.target.value);
 $("persp").oninput = e => view.set({ perspective: e.target.value / 100 });
+$("depth").oninput = e => view.set({ depth: e.target.value / 100 });
+seg("faces", v => view.set({ faces: v === "on" }));
 
 // ---------- colour: the whole structure, or the residues selected in the sequence ----------
 // Favourite swatches up front, in groups; ChimeraX's basic colours behind "More colours".
@@ -138,6 +144,7 @@ function showSelection() {
   $("colourTarget").textContent = n ? `${n} selected` : "all";
   $("colourTarget").classList.toggle("sel", n > 0);
   $("selInfo").innerHTML = n ? `<b>${n}</b> selected (${ranges()})` : "";
+  if (scMode === "sel") syncSideChains();
 }
 const indexAt = e => { const r = $("seqTrack").getBoundingClientRect(); return Math.max(0, Math.min(residues.length - 1, Math.floor((e.clientX - r.left) / RW))); };
 $("seqTrack").addEventListener("pointerdown", e => {
@@ -180,26 +187,21 @@ function shape(partial) {          // coalesce slider drags into one rebuild per
   rebuildQueued = { ...(rebuildQueued || {}), ...partial };
   requestAnimationFrame(() => { if (rebuildQueued) { view.setShape(rebuildQueued); rebuildQueued = null; } });
 }
-const isCyl = () => view.options.shape.hStyle === "cylinder";
 const SLIDERS = {
-  hW: v => shape(isCyl() ? { cylR: v / 100 * 1.7 } : { hW: v / 100 }),
+  hW: v => shape({ hW: v / 100 }),
   hT: v => shape({ hT: v / 100 }), flat: v => shape({ flat: v / 100 }), sW: v => shape({ sW: v / 100 }),
   sT: v => shape({ sT: v / 100 }), head: v => shape({ head: v / 100 }), coilR: v => shape({ coilR: v / 100 }),
 };
 for (const [id, fn] of Object.entries(SLIDERS)) $(id).addEventListener("input", e => fn(+e.target.value));
 function syncShapeUI() {
-  const s = view.options.shape, cyl = s.hStyle === "cylinder";
-  $("hW").value = Math.round((cyl ? s.cylR / 1.7 : s.hW) * 100);
-  $("hTwrap").classList.toggle("off", cyl);
-  $("headWrap").classList.toggle("off", !s.arrows);
+  $("headWrap").classList.toggle("off", !view.options.shape.arrows);
 }
-seg("hStyle", v => { view.setShape({ hStyle: v }); syncShapeUI(); });
 seg("arrows", v => { view.setShape({ arrows: v === "on" }); syncShapeUI(); });
 $("shapeReset").onclick = () => {
   view.resetShape();
   const d = SHAPE_DEFAULT;
   for (const [id, v] of Object.entries({ hT: d.hT, flat: d.flat, sW: d.sW, sT: d.sT, head: d.head, coilR: d.coilR })) $(id).value = Math.round(v * 100);
-  setSeg("hStyle", "ribbon"); setSeg("arrows", "on");
+  $("hW").value = Math.round(d.hW * 100); setSeg("arrows", "on");
 };
 
 // ---------- snapshot ----------
