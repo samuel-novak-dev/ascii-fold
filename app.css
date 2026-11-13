@@ -10,7 +10,7 @@ body {
   height: 100vh; height: 100dvh; overflow: hidden; display: flex; flex-direction: column;
   transition: background .3s, color .3s;
 }
-body.night { --paper: #121212; --ink: #F2ECDF; --mute: #77736b; }
+body.night { --paper: #696969; --ink: #F2ECDF; --mute: #D4CFC5; }   /* dim gray, not black */
 a { color: var(--blue); }
 
 /* ---------- header ---------- */

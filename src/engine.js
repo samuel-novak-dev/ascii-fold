@@ -20,7 +20,7 @@ import { createSurfaceGL } from "./glsurface.js";
 export const PALETTES = {
   paper: { bg: "#F2ECDF", ink: "#1B1A18", H: "#D33A2C", E: "#1F63B0", C: "#C99410",
            P: ["#0053D6", "#65CBF3", "#D9B400", "#FF7D45"] },
-  night: { bg: "#121212", ink: "#F2ECDF", H: "#D33A2C", E: "#1F63B0", C: "#EFB52E",
+  night: { bg: "#696969", ink: "#F2ECDF", H: "#D33A2C", E: "#1F63B0", C: "#EFB52E",
            P: ["#0053D6", "#65CBF3", "#FFDB13", "#FF7D45"] },
 };
 export const GLYPHS = { classic: " .,:;-=+*x#%@", blocks: " ·░░▒▒▓▓██", geo: " ·∙•◦○◎●◉■" };
