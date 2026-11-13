@@ -5,15 +5,10 @@ import { SHAPE_DEFAULT } from "./geometry.js";
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-const RANDOM_POOL = [
-  "P42212", "P00698", "P69905", "P68871", "P04637", "P01116", "P00533", "P07900", "P02768", "P05067",
-  "P38398", "P0DP23", "P62988", "P00760", "P01308", "P10636", "Q9BYF1", "P35222", "P61626",
-];
-
 const view = createAsciiFold($("stage"));
 window.asciiFold = view;   // handy from the console: asciiFold.set({ spin: 0 }), asciiFold.snapshot() …
 
-// ---------- header, status, credit ----------
+// ---------- header, errors, credit ----------
 function status(msg, err = false) { $("status").innerHTML = msg; $("status").classList.toggle("err", err); }
 view.on("load", info => {
   $("title").textContent = info.title;
@@ -28,34 +23,12 @@ view.on("load", info => {
     ? `Structure: <a href="${info.entryUrl}" target="_blank" rel="noopener">AlphaFold DB</a> (CC BY 4.0)`
     : info.hasPlddt ? "Structure: AlphaFold DB (CC BY 4.0)" : "";
 });
-view.on("zoom", z => $("zval").textContent = z.toFixed(1) + "×");
 
-// ---------- loading ----------
-async function loadAccession(raw) {
-  status(`Fetching ${esc(raw.trim().toUpperCase())} from AlphaFold DB…`);
-  try {
-    const info = await view.loadAccession(raw);
-    if (!info) return;
-    $("acc").value = info.acc;
-    status(`Loaded <a href="${info.entryUrl}" target="_blank" rel="noopener">AF-${esc(info.acc)}</a> from AlphaFold DB.`);
-    try { history.replaceState(null, "", "#" + info.acc); } catch {}
-  } catch (e) {
-    if (e.name === "AbortError") return;
-    if (e.kind === "network")
-      status(`${esc(e.message)} Download the model from <a href="https://alphafold.ebi.ac.uk/entry/${esc(e.acc)}" target="_blank" rel="noopener">the ${esc(e.acc)} entry</a> and drop the .pdb or .cif file here.`, true);
-    else status(esc(e.message), true);
-  }
-}
+// ---------- loading: open or drop a .pdb / .cif file ----------
 async function loadFile(f) {
-  try { const info = await view.loadFile(f); if (info) status(`Loaded ${esc(f.name)}.`); }
+  try { const info = await view.loadFile(f); if (info) status(""); }
   catch (e) { status(`Couldn't read ${esc(f.name)}: ${esc(e.message)}`, true); }
 }
-
-$("form").onsubmit = e => { e.preventDefault(); loadAccession($("acc").value); };
-$("rand").onclick = () => {
-  let pick; do { pick = RANDOM_POOL[Math.floor(Math.random() * RANDOM_POOL.length)]; } while (pick === $("acc").value);
-  $("acc").value = pick; loadAccession(pick);
-};
 $("openBtn").onclick = () => $("file").click();
 $("file").onchange = e => { const f = e.target.files[0]; if (f) loadFile(f); e.target.value = ""; };
 
@@ -162,8 +135,7 @@ function showSelection() {
   $("selClear").hidden = !n;
   $("colourTarget").textContent = n ? `${n} selected` : "all";
   $("colourTarget").classList.toggle("sel", n > 0);
-  $("selInfo").innerHTML = n ? `<b>${n}</b> selected (${ranges()}). Pick a colour to recolour them.`
-    : "Drag across residues to select, or click a helix or strand. Shift adds to the selection.";
+  $("selInfo").innerHTML = n ? `<b>${n}</b> selected (${ranges()})` : "";
 }
 const indexAt = e => { const r = $("seqTrack").getBoundingClientRect(); return Math.max(0, Math.min(residues.length - 1, Math.floor((e.clientX - r.left) / RW))); };
 $("seqTrack").addEventListener("pointerdown", e => {
@@ -187,17 +159,6 @@ $("seqTrack").addEventListener("pointerup", endDrag);
 $("seqTrack").addEventListener("pointercancel", endDrag);
 $("selClear").onclick = () => { sel.clear(); showSelection(); };
 window.addEventListener("keydown", e => { if (e.key === "Escape" && sel.size && $("gifDlg").hidden) { sel.clear(); showSelection(); } });
-
-// ---------- zoom ----------
-$("zin").onclick = () => view.zoomBy(1.25);
-$("zout").onclick = () => view.zoomBy(0.8);
-$("zfit").onclick = () => view.resetView();
-window.addEventListener("keydown", e => {
-  if (e.target.tagName === "INPUT") return;
-  if (e.key === "+" || e.key === "=") view.zoomBy(1.25);
-  else if (e.key === "-" || e.key === "_") view.zoomBy(0.8);
-  else if (e.key === "0") view.resetView();
-});
 
 // ---------- shape panel ----------
 let rebuildQueued = null;
@@ -287,11 +248,3 @@ $("gifGo").onclick = async () => {
 markColour(view.options.colour);
 renderLegend();
 view.loadDefault();
-status("Enter a UniProt accession, hit Random, or drop an AlphaFold .pdb / .cif file.");
-let startAcc = "";
-try { startAcc = decodeURIComponent(location.hash.slice(1)); } catch {}
-if (startAcc) { $("acc").value = startAcc.toUpperCase(); loadAccession(startAcc); }
-window.addEventListener("hashchange", () => {
-  let a = ""; try { a = decodeURIComponent(location.hash.slice(1)); } catch {}
-  if (a && a.toUpperCase() !== (view.info && view.info.acc)) { $("acc").value = a.toUpperCase(); loadAccession(a); }
-});

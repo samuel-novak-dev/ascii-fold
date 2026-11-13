@@ -1,18 +1,18 @@
 # ASCII Fold
 
-Spinning protein structures drawn as ASCII text that dissolves into a cartoon ribbon. Type a UniProt accession and the model loads straight from [AlphaFold DB](https://alphafold.ebi.ac.uk) in your browser. There's no server and no build step to run it.
+Spinning protein structures drawn as ASCII text that dissolves into a cartoon ribbon or a molecular surface. Open a `.pdb` / `.cif` file (from [AlphaFold DB](https://alphafold.ebi.ac.uk), the PDB or your own) and it's drawn in your browser. There's no server and no build step to run it.
 
 <p align="center"><img src="docs/demo.gif" alt="KRAS G12D rotating: ASCII characters on the left dissolve into a red, blue and gold cartoon ribbon on the right" width="560"></p>
 
 - **Text in 3D.** Glyphs are printed on the surface of the chain: they shrink and fade with distance, hide behind nearer parts, darken on the side away from the light and foreshorten as the surface turns away. The text takes the cartoon's shape: helices are twisting ribbons, strands are flat arrows and loops are thin tubes, so text and ribbon line up exactly where one turns into the other. A Perspective slider sets how strongly near parts loom.
 - **Text → ribbon blend.** One projection drives the text and a canvas cartoon, so they always line up. The handover is a fixed dither, like a halftone.
-- **Any AlphaFold DB model.** Load by accession, by URL hash (`#P04637`), or by dropping a `.pdb` / `.cif` file on the page. Colour by secondary structure, by pLDDT, or in one colour: a row of favourites plus ChimeraX's basic colours.
+- **Your structures.** Open or drop a `.pdb` / `.cif` file (gzipped is fine) on the page; the embeddable element can also fetch AlphaFold DB models by accession. Colour by secondary structure, by pLDDT, or in one colour: a row of favourites plus ChimeraX's basic colours.
 - **Surface.** Show the molecular surface instead of the cartoon, built from every heavy atom at its van der Waals radius, as in ChimeraX. It's drawn as a smooth triangle mesh with WebGL and lit like ChimeraX's gentle lighting, with depth cueing only in the back half. The text is printed on the same surface. Files with only Cα atoms get a smoother residue-level surface.
 - **Sequence panel.** The chain's sequence runs along the bottom with its helices and strands. Drag across residues or click a helix or strand to select it, Shift to add, then pick a colour to recolour just those residues.
 - **Lighting.** One style throughout, after ChimeraX's `lighting gentle`: soft ambient light with ambient occlusion, so grooves and buried faces darken, plus a little key light and no highlights.
 - **Shape controls** (in the settings panel, under Glyphs and shape). Flatten strands and size their arrowheads. Draw helices as flat ribbons on a fitted ideal helix (2.2 Å wide and paper-thin by default) or as cylinders. Set thickness and width for helices, strands and loops.
 - **Zoom and detail.** Zoom adds characters instead of enlarging them (the 3D text re-samples in half-octave steps). The Detail setting picks the number of text rows, which also sets the 3D glyph size.
-- **Export.** Save seamless looping GIFs (one exact turn, up to 1080 px wide) or PNG snapshots. Links with a UniProt accession in the hash (`#P04637`) open that protein.
+- **Export.** Save seamless looping GIFs (one exact turn, up to 1080 px wide) or PNG snapshots.
 - **Embeddable.** `<ascii-fold accession="P01116">` works on any page.
 
 ## Run it
@@ -68,7 +68,7 @@ AlphaFold DB sends CORS headers, so visitors' browsers fetch models directly and
 
 Size the element with CSS; it defaults to 360 px tall. It fires `fold-load` and `fold-error` events and exposes the engine as `element.view`. `examples/embed.html` shows a few variants.
 
-For your homepage, `<iframe src="https://<you>.github.io/ascii-fold/#P69905">` embeds the full app.
+For a bigger view on your homepage, embed the full app in an `<iframe>`, or use the element above.
 
 ## Use the engine directly
 

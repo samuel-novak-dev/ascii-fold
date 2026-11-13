@@ -27,24 +27,17 @@
     <h1 id="title">KRAS G12D</h1>
     <span class="sub" id="sub">PDB 6GJ8 · chain A</span>
   </div>
-  <form class="loader" id="form" autocomplete="off">
-    <input id="acc" placeholder="UniProt ID" spellcheck="false" aria-label="UniProt accession">
-    <button class="btn" type="submit">Load</button>
-    <button class="btn alt" type="button" id="rand">Random</button>
+  <div class="loader">
     <button class="btn ghost" type="button" id="openBtn">Open file</button>
     <input type="file" id="file" accept=".pdb,.cif,.mmcif,.ent,.gz" hidden>
-  </form>
+  </div>
 </header>
 <div id="status" role="status"></div>
 
 <div class="work">
   <div class="view">
     <main id="stage"></main>
-    <div class="zoom" aria-label="Zoom">
-      <button type="button" id="zout" aria-label="Zoom out">−</button><button type="button" id="zfit">Fit</button><button type="button" id="zin" aria-label="Zoom in">+</button>
-      <span id="zval">1.0×</span>
-    </div>
-    <div class="hint"><span>Drag to rotate · Shift-drag to pan · Scroll to zoom · Double-click to reset</span><span id="credit"></span></div>
+    <div class="hint"><span id="credit"></span></div>
   </div>
 
   <aside id="panel" aria-label="Display settings">
@@ -99,7 +92,7 @@
 <section id="seq" aria-label="Sequence">
   <div class="seqhead">
     <h3>Sequence</h3>
-    <span id="selInfo" class="selinfo">Drag across residues to select, or click a helix or strand. Shift adds to the selection.</span>
+    <span id="selInfo" class="selinfo"></span>
     <button type="button" class="link" id="selClear" hidden>Clear selection</button>
     <button type="button" class="link" id="colReset" hidden>Reset colours</button>
   </div>

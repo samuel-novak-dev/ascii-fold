@@ -23,13 +23,8 @@ header { display: flex; align-items: center; gap: 14px 22px; padding: 18px 24px 
 .mark i:nth-child(3) { width: 0; height: 0; border-left: 8px solid transparent; border-right: 8px solid transparent; border-bottom: 14px solid var(--yellow); }
 h1 { font-size: 15px; letter-spacing: .18em; text-transform: uppercase; margin: 0; font-weight: 700; }
 .sub { font-size: 12px; color: var(--mute); letter-spacing: .04em; }
-.loader { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.loader input {
-  font: 600 13px "JetBrains Mono", ui-monospace, Menlo, monospace; letter-spacing: .06em; text-transform: uppercase;
-  width: 128px; padding: 6px 8px; border: 2px solid var(--ink); background: transparent; color: var(--ink); outline: none;
-}
-.loader input:focus { border-color: var(--red); }
-#status { font-size: 12px; color: var(--mute); padding: 0 24px; min-height: 16px; letter-spacing: .03em; }
+.loader { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+#status { font-size: 12px; color: var(--mute); padding: 0 24px; letter-spacing: .03em; }   /* errors only */
 #status.err { color: var(--red); }
 
 /* ---------- view + right panel ---------- */
@@ -41,12 +36,7 @@ main#stage.drop::after {
   border: 3px dashed var(--red); font-size: 14px; letter-spacing: .14em; text-transform: uppercase; color: var(--red);
   background: color-mix(in srgb, var(--paper) 80%, transparent); z-index: 2;
 }
-.zoom { position: absolute; left: 24px; top: 10px; z-index: 3; display: flex; align-items: center; gap: 0; }
-.zoom button { font: 600 12px Futura, "Century Gothic", sans-serif; letter-spacing: .08em; text-transform: uppercase;
-  background: var(--paper); color: var(--ink); border: 2px solid var(--ink); padding: 3px 8px; cursor: pointer; min-width: 30px; }
-.zoom button + button { border-left: 0; }
-.zoom span { font: 600 11px "JetBrains Mono", ui-monospace, monospace; margin-left: 8px; color: var(--mute); }
-.hint { display: flex; justify-content: space-between; gap: 16px; font-size: 11px; color: var(--mute); padding: 0 24px 6px; letter-spacing: .03em; }
+.hint { display: flex; justify-content: flex-end; font-size: 11px; color: var(--mute); padding: 0 24px 6px; letter-spacing: .03em; min-height: 6px; }
 
 #panel { width: 268px; flex: 0 0 268px; overflow-y: auto; border-left: 2px solid var(--ink); padding: 14px 16px 18px;
   display: flex; flex-direction: column; gap: 18px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; scrollbar-width: thin; }
@@ -146,14 +136,10 @@ input[type=range] { accent-color: var(--red); width: 100%; margin: 0; }
 
 @media (max-width: 860px) {
   header { padding: 12px 14px 4px; gap: 8px; }
-  .loader { margin-left: 0; width: 100%; }
-  .loader input { flex: 1; min-width: 0; }
   #status { padding: 0 14px; font-size: 11px; }
   .work { flex-direction: column; }
   .view { flex: 1 1 55%; }
   #panel { width: auto; flex: 0 1 45%; border-left: 0; border-top: 2px solid var(--ink); padding: 12px 14px; }
-  .zoom { left: 14px; }
-  .hint > span:first-child { display: none; }
   .hint { padding: 0 14px 4px; }
   #seq { padding: 6px 14px 8px; }
   .selinfo { display: none; }
