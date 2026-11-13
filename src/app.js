@@ -1,5 +1,5 @@
 // The full-page app (index.html): wires the toolbar and panels to one engine view.
-import { createAsciiFold } from "./engine.js";
+import { createAsciiFold, COLOURS } from "./engine.js";
 import { SHAPE_DEFAULT } from "./geometry.js";
 
 const $ = id => document.getElementById(id);
@@ -71,6 +71,7 @@ window.addEventListener("drop", e => {
 const handlers = {};
 function setSeg(id, v) {
   $(id).querySelectorAll("button").forEach(x => x.classList.toggle("on", x.dataset.v === v));
+  if (id === "colour") $("swatches").querySelectorAll("button").forEach(x => x.classList.toggle("on", x.dataset.v === v));
   handlers[id](v);
 }
 function seg(id, fn) {
@@ -79,15 +80,21 @@ function seg(id, fn) {
 }
 function renderLegend() {
   const p = view.palette(), c = view.options.colour;
+  const solid = COLOURS.find(([n]) => n === c);
   const items = c === "ss" ? [["Helix", p.H], ["Strand", p.E], ["Coil", p.C]]
-    : c === "plddt" ? [[">90", p.P[0]], ["70–90", p.P[1]], ["50–70", p.P[2]], ["<50", p.P[3]]] : [];
+    : c === "plddt" ? [[">90", p.P[0]], ["70–90", p.P[1]], ["50–70", p.P[2]], ["<50", p.P[3]]] : solid ? [solid] : [];
   $("legend").innerHTML = items.map(([t, col]) => `<span style="--sw:${col}">${t}</span>`).join("");
 }
 seg("layout", v => view.set({ layout: v }));
 seg("text", v => view.set({ text: v }));
+seg("lighting", v => view.set({ lighting: v }));
+seg("surface", v => view.set({ surface: v === "on" }));
 $("persp").oninput = e => view.set({ perspective: e.target.value / 100 });
 seg("seam", v => view.set({ seam: v }));
 seg("colour", v => { view.set({ colour: v }); renderLegend(); });
+// one-colour swatches, ChimeraX style; they share the colour control's handler and highlight
+$("swatches").innerHTML = COLOURS.map(([n, h]) => `<button type="button" data-v="${n}" title="${n}" aria-label="${n}" style="--c:${h}"></button>`).join("");
+$("swatches").addEventListener("click", e => { const b = e.target.closest("button"); if (b) setSeg("colour", b.dataset.v); });
 seg("theme", v => { document.body.classList.toggle("night", v === "night"); view.set({ theme: v }); renderLegend(); });
 seg("glyphs", v => view.set({ glyphs: v }));
 seg("detail", v => view.set({ detail: v }));

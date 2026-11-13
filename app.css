@@ -48,6 +48,9 @@ input[type=range] { accent-color: var(--red); width: 96px; }
 .seg button + button { border-left: 2px solid var(--ink); }
 .seg button.on { background: var(--ink); color: var(--paper); }
 .seg button:disabled { opacity: .35; cursor: not-allowed; }
+.swatches { display: grid; grid-template-columns: repeat(10, 14px); gap: 3px; }
+.swatches button { width: 14px; height: 14px; padding: 0; border: 1px solid var(--ink); background: var(--c); cursor: pointer; }
+.swatches button.on { outline: 2px solid var(--ink); outline-offset: 1px; }
 .btn { font: inherit; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; background: var(--red); color: #fff; border: 0; padding: 7px 11px; cursor: pointer; }
 .btn.alt { background: var(--blue); }
 .btn.ghost { background: transparent; color: var(--ink); border: 2px solid var(--ink); padding: 5px 9px; }

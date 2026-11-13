@@ -5,11 +5,13 @@ import { createAsciiFold } from "./engine.js";
 // Attributes (all optional):
 //   accession     UniProt accession to fetch from AlphaFold DB
 //   src           URL of a .pdb / .cif file to load instead (must be CORS-readable)
-//   theme         paper | night                      colour      ss | plddt | mono
+//   theme         paper | night                      colour      ss | plddt | a ChimeraX colour name or hex
 //   layout        lr | rl | ascii | ribbon           seam        dither | soft
 //   text          3d | flat                          perspective 0–1 (default 0.5; 0 = orthographic)
+//   lighting      default | gentle (soft ambient occlusion, as in ChimeraX)
+//   surface       show the molecular surface instead of the cartoon (attribute present = on)
 //   glyphs        classic | blocks | geo | <custom ramp, light → dark>
-//   detail        coarse | medium | fine | ultra | <rows>
+//   detail        xcoarse | coarse | medium | <rows>
 //   spin          rotation speed, 0–1 (default 0.35; 0 if the visitor prefers reduced motion)
 //   blend-from / blend-to   where the text→ribbon blend starts/ends, 0–1
 //   helix-style   ribbon | cylinder
@@ -24,6 +26,8 @@ const OPTION_ATTRS = {
   theme: v => ({ theme: v }), colour: v => ({ colour: v }), color: v => ({ colour: v }), layout: v => ({ layout: v }),
   seam: v => ({ seam: v }), glyphs: v => ({ glyphs: v }),
   text: v => ({ text: v === "flat" ? "flat" : "3d" }),
+  lighting: v => ({ lighting: v === "gentle" ? "gentle" : "default" }),
+  surface: v => ({ surface: v !== null && v !== "false" }),
   perspective: v => ({ perspective: Math.max(0, Math.min(1, parseFloat(v) || 0)) }),
   detail: v => ({ detail: /^\d+$/.test(v) ? +v : v }),
   spin: v => ({ spin: parseFloat(v) || 0 }),

@@ -4,10 +4,12 @@ Spinning protein structures drawn as ASCII text that dissolves into a cartoon ri
 
 <p align="center"><img src="docs/demo.gif" alt="KRAS G12D rotating: ASCII characters on the left dissolve into a red, blue and gold cartoon ribbon on the right" width="560"></p>
 
-- **Text in 3D.** Glyphs are printed on the surface of the chain: they shrink and fade with distance, hide behind nearer parts, darken on the side away from the light and foreshorten as the surface turns away. Helices become solid cylinders of text. The original flat character grid is one click away (Text → Flat), and a Perspective slider sets how strongly near parts loom.
+- **Text in 3D.** Glyphs are printed on the surface of the chain: they shrink and fade with distance, hide behind nearer parts, darken on the side away from the light and foreshorten as the surface turns away. The text takes the cartoon's shape: helices are twisting ribbons, strands are flat arrows and loops are thin tubes, so text and ribbon line up exactly where one turns into the other. The original flat character grid is one click away (Text → Flat), and a Perspective slider sets how strongly near parts loom.
 - **Text → ribbon blend.** One projection drives the text and a canvas cartoon, so they always line up. The handover is a fixed dither, like a halftone, or a soft cross-fade.
-- **Any AlphaFold DB model.** Load by accession, by URL hash (`#P04637`), or by dropping a `.pdb` / `.cif` file on the page. Colour by secondary structure, by pLDDT, or in a single ink colour.
-- **Shape controls.** Flatten strands and size their arrowheads. Draw helices as twisted ribbons or as cylinders. Set thickness and width for helices, strands and loops.
+- **Any AlphaFold DB model.** Load by accession, by URL hash (`#P04637`), or by dropping a `.pdb` / `.cif` file on the page. Colour by secondary structure, by pLDDT, or in one of ChimeraX's basic colours.
+- **Surface.** Show a smooth molecular surface instead of the cartoon, at residue scale, with the text printed on it. It's built from Cα alone, so there are no side-chain bumps.
+- **Lighting.** Default (a key light with highlights) or Gentle, after ChimeraX's `lighting gentle`: soft ambient light with ambient occlusion, so grooves and buried faces darken.
+- **Shape controls.** Flatten strands and size their arrowheads. Draw helices as ChimeraX-style oval ribbons (2 Å wide by default) or as cylinders. Set thickness and width for helices, strands and loops.
 - **Zoom and detail.** Zoom adds characters instead of enlarging them (the 3D text re-samples in half-octave steps). The Detail setting picks the number of text rows, which also sets the 3D glyph size.
 - **Export.** Save seamless looping GIFs (one exact turn, up to 1080 px wide), PNG snapshots or the frame as plain text, and share a link to the protein on screen.
 - **Embeddable.** `<ascii-fold accession="P01116">` works on any page.
@@ -50,13 +52,15 @@ AlphaFold DB sends CORS headers, so visitors' browsers fetch models directly and
 | `accession` | UniProt accession, fetched from AlphaFold DB | bundled KRAS (PDB 6GJ8) |
 | `src` | URL of a `.pdb` / `.cif` file (must be CORS-readable) | |
 | `theme` | `paper` · `night` | `paper` |
-| `colour` | `ss` · `plddt` · `mono` | `ss` |
+| `colour` | `ss` · `plddt`, or one colour: a ChimeraX basic colour name (`red`, `orange red`, `cornflower blue`, `light sea green`, `dim gray` …) or a hex value | `ss` |
 | `layout` | `lr` (text→ribbon) · `rl` · `ascii` · `ribbon` | `lr` |
 | `text` | `3d` (glyphs on the 3D surface) · `flat` (character grid) | `3d` |
 | `perspective` | 0–1; 0 is orthographic | `0.5` |
+| `lighting` | `default` · `gentle` | `default` |
+| `surface` | present: show the molecular surface instead of the cartoon | |
 | `seam` | `dither` · `soft` | `dither` |
 | `glyphs` | `classic` · `blocks` · `geo`, or your own light→dark ramp | `classic` |
-| `detail` | `coarse` · `medium` · `fine` · `ultra`, or a row count | `medium` |
+| `detail` | `xcoarse` · `coarse` · `medium`, or a row count | `medium` |
 | `spin` | rotation speed, 0–1 | `0.35` (0 with reduced motion) |
 | `blend-from`, `blend-to` | where the blend starts and ends, 0–1 | `0.25`, `0.8` |
 | `helix-style` | `ribbon` · `cylinder` | `ribbon` |
@@ -77,6 +81,7 @@ const view = createAsciiFold(document.querySelector("#box"), { theme: "night", c
 await view.loadAccession("P42212");
 view.setShape({ hStyle: "cylinder", flat: 1 });
 view.set({ text: "flat", perspective: 0 });   // the original flat grid, no perspective
+view.set({ surface: true, lighting: "gentle", colour: "cornflower blue" });
 view.setRotation(1.2, -0.3);
 const png = view.snapshot();       // data URL of the current frame
 const gif = await view.recordGif({ frames: 60, width: 720 });   // Blob: one seamless turn
@@ -91,8 +96,10 @@ Other methods: `set(options)`, `loadFile(file)`, `loadText(text)`, `loadDefault(
 2. **Secondary structure.** Use HELIX/SHEET records when present. Otherwise assign it from Cα distances alone (`src/ss.js`, P-SEA-like). This agreed with deposited assignments on about 80–86% of residues in our checks, which is fine for drawing but not for analysis.
 3. **Geometry.** Draw a Catmull-Rom spline through Cα. Orient the ribbon using the backbone C=O directions. Smooth the strand pleats on request, and fit helix axes for cylinders (`src/geometry.js`).
 4. **Text.** Splat spheres along the spline into a z-buffered cell grid, shade them with a simple light and depth cue, and map brightness to a glyph ramp. That grid is the flat text.
-   In 3D mode, glyphs sit on rings around a tube that follows the chain (around the helix axis for helices). Each frame they are rotated with the model, dropped when they face away or the z-buffer shows a nearer part in front, sized by perspective, fogged by depth, laid into the surface's tangent plane and drawn back to front from a pre-rendered glyph atlas. A small paper disc under each glyph hides ink further back.
-5. **Ribbon.** Draw the cartoon with a painter's algorithm on a 2D canvas, in the same (perspective) projection as the text.
+   In 3D mode, glyphs sit on the cartoon's own surfaces instead: rows across both faces and the edges of helix and strand bands, and rings around loop tubes, using the same widths as the ribbon. Each frame they are rotated with the model and dropped when they face away. The rest are splatted into a depth buffer, and any glyph with a nearer surface in front is dropped too. The survivors are sized by perspective, fogged by depth, laid into the surface's tangent plane and drawn back to front from a pre-rendered glyph atlas. A small paper disc under each glyph hides ink further back.
+5. **Ribbon.** Draw the cartoon with a painter's algorithm on a 2D canvas, in the same (perspective) projection as the text. Helices have an oval cross-section, drawn as a shading gradient across the band.
+   **Surface.** The surface is the isosurface of a sum of Gaussians, one per Cα (`src/surface.js`). It's sampled as evenly spaced points: seeds around each residue are pushed onto the isosurface by Newton steps, then thinned. The solid surface is those points drawn as overlapping shaded discs, back to front. The 3D text sits on the same points.
+   **Gentle lighting.** Ambient occlusion is the Cα density just outside each surface point, calibrated per structure, mixed with a little directional light and no highlights.
 6. **Blend.** A fixed random mask hands each character cell (flat text) or each glyph (3D text) to either the text or the ribbon according to its horizontal position. Under 3D text the ribbon fades in rather than being masked cell by cell.
 
 The `scripts/extract_ca_o.py` script turns any PDB file into the compact Cα+O format used for the bundled structure.
@@ -109,6 +116,7 @@ npm run build      # dist/ascii-fold.js (ESM), dist/ascii-fold.iife.js (global A
 src/
   engine.js               createAsciiFold(): rendering, interaction, public API
   geometry.js             spline, ribbon frames, shape parameters
+  surface.js              molecular surface from Cα (Gaussian isosurface, sampled as points)
   parse.js · ss.js        PDB/mmCIF reader, Cα-only secondary structure
   afdb.js                 AlphaFold DB fetch + accession handling
   ascii-fold-element.js   <ascii-fold> web component

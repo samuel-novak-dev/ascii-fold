@@ -47,7 +47,7 @@
     <span id="zval" class="zval">1.0×</span>
   </div>
   <div class="ctl"><label>Detail</label>
-    <div class="seg" id="detail"><button data-v="coarse">Coarse</button><button data-v="medium" class="on">Medium</button><button data-v="fine">Fine</button><button data-v="ultra">Ultra</button></div>
+    <div class="seg" id="detail"><button data-v="xcoarse">Extra coarse</button><button data-v="coarse">Coarse</button><button data-v="medium" class="on">Medium</button></div>
   </div>
   <div class="ctl"><label for="speed">Spin</label><input id="speed" type="range" min="0" max="100" value="35"></div>
   <div class="ctl"><label for="f0">Blend from</label><input id="f0" type="range" min="0" max="100" value="25"></div>
@@ -55,15 +55,22 @@
   <div class="ctl"><label>Layout</label>
     <div class="seg" id="layout"><button data-v="lr" class="on">Text→Ribbon</button><button data-v="rl">Ribbon→Text</button><button data-v="ascii">Text</button><button data-v="ribbon">Ribbon</button></div>
   </div>
+  <div class="ctl"><label>Surface</label>
+    <div class="seg" id="surface"><button data-v="off" class="on">Off</button><button data-v="on">On</button></div>
+  </div>
   <div class="ctl"><label>Text</label>
     <div class="seg" id="text"><button data-v="3d" class="on">3D</button><button data-v="flat">Flat</button></div>
+  </div>
+  <div class="ctl"><label>Lighting</label>
+    <div class="seg" id="lighting"><button data-v="default" class="on">Default</button><button data-v="gentle">Gentle</button></div>
   </div>
   <div class="ctl"><label for="persp">Perspective</label><input id="persp" type="range" min="0" max="100" value="50"></div>
   <div class="ctl"><label>Seam</label>
     <div class="seg" id="seam"><button data-v="dither" class="on">Dither</button><button data-v="soft">Soft</button></div>
   </div>
   <div class="ctl"><label>Colour</label>
-    <div class="seg" id="colour"><button data-v="ss" class="on">SS</button><button data-v="plddt" id="plddtBtn" disabled>pLDDT</button><button data-v="mono">Ink</button></div>
+    <div class="seg" id="colour"><button data-v="ss" class="on">SS</button><button data-v="plddt" id="plddtBtn" disabled>pLDDT</button></div>
+    <div class="swatches" id="swatches" role="group" aria-label="One colour (ChimeraX basic colours)"></div>
   </div>
   <div class="ctl"><label>Ground</label>
     <div class="seg" id="theme"><button data-v="paper" class="on">Paper</button><button data-v="night">Night</button></div>
@@ -82,8 +89,8 @@
 <section id="shape" class="shape" aria-label="Shape controls">
   <div class="grp"><span class="gl"><i class="sw h"></i>Helix</span>
     <div class="seg" id="hStyle"><button data-v="ribbon" class="on">Ribbon</button><button data-v="cylinder">Cylinder</button></div>
-    <div class="ctl"><label for="hW">Width</label><input id="hW" type="range" min="50" max="250" value="135"></div>
-    <div class="ctl" id="hTwrap"><label for="hT">Thickness</label><input id="hT" type="range" min="4" max="120" value="28"></div>
+    <div class="ctl"><label for="hW">Width</label><input id="hW" type="range" min="50" max="250" value="100"></div>
+    <div class="ctl" id="hTwrap"><label for="hT">Thickness</label><input id="hT" type="range" min="4" max="120" value="20"></div>
   </div>
   <div class="grp"><span class="gl"><i class="sw e"></i>Strand</span>
     <div class="ctl"><label for="flat">Flatten</label><input id="flat" type="range" min="0" max="100" value="60"></div>
