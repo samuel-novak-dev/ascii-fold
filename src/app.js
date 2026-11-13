@@ -84,6 +84,8 @@ function renderLegend() {
   $("legend").innerHTML = items.map(([t, col]) => `<span style="--sw:${col}">${t}</span>`).join("");
 }
 seg("layout", v => view.set({ layout: v }));
+seg("text", v => view.set({ text: v }));
+$("persp").oninput = e => view.set({ perspective: e.target.value / 100 });
 seg("seam", v => view.set({ seam: v }));
 seg("colour", v => { view.set({ colour: v }); renderLegend(); });
 seg("theme", v => { document.body.classList.toggle("night", v === "night"); view.set({ theme: v }); renderLegend(); });

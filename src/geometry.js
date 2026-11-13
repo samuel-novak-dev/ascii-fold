@@ -54,9 +54,9 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
     CA = nx;
   }
 
-  // helix axes for cylinder mode
+  // helix axes: drawn on in cylinder mode, and always the core of the 3D text's helix tube
   const AX = new Array(N).fill(null);
-  if (cyl) for (let i = 0; i < N;) {
+  for (let i = 0; i < N;) {
     if (SS[i] !== "H") { i++; continue; }
     let j = i; while (j + 1 < N && SS[j + 1] === "H") j++;
     helixAxis(CA, i, j).forEach((p, k) => AX[i + k] = p);
@@ -81,6 +81,9 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
 
   const rH = cyl ? SH.cylR : 2.1 * SH.hW / 1.35, rE = Math.max(1.0, SH.sW * 1.35);
   const radOf = ss => ss === "H" ? rH : ss === "E" ? rE : 0.95;
+  // 3D text tube (tp, tr): helices become one solid cylinder around the axis instead of a
+  // tube along the Cα spiral, which reads as a coiled spring once drawn in depth
+  const rHT = cyl ? SH.cylR : 2.2 + 0.9 * SH.hW, tRad = ss => ss === "H" ? rHT : radOf(ss);
   const pts = [];
   for (let i = 0; i < N - 1; i++) {
     const p0 = CA[Math.max(0, i - 1)], p1 = CA[i], p2 = CA[i + 1], p3 = CA[Math.min(N - 1, i + 2)];
@@ -96,13 +99,19 @@ export function buildGeometry(parsed, shape = SHAPE_DEFAULT) {
         const c = k => 0.5 * ((2 * p1[k]) + (-p0[k] + p2[k]) * t + (2 * p0[k] - 5 * p1[k] + 4 * p2[k] - p3[k]) * t2 + (-p0[k] + 3 * p1[k] - 3 * p2[k] + p3[k]) * t3);
         pos = [c(0), c(1), c(2)];
       }
-      const near = t < 0.5 ? i : i + 1;
+      const near = t < 0.5 ? i : i + 1, hi = SS[i] === "H", hj = SS[i + 1] === "H";
+      let tp = pos;
+      if (!cyl && hi && hj) tp = add(mul(AX[i], 1 - t), mul(AX[i + 1], t));
+      else if (!cyl && hi) tp = add(mul(AX[i], 1 - t), mul(pos, t));      // leave the helix axis
+      else if (!cyl && hj) tp = add(mul(pos, 1 - t), mul(AX[i + 1], t));  // join it
       pts.push({ p: pos, r: radOf(SS[i]) * (1 - t) + radOf(SS[i + 1]) * t, ss: SS[near], pk: PB[near],
+                 tp, tr: tRad(SS[i]) * (1 - t) + tRad(SS[i + 1]) * t,
                  side: norm(add(mul(SIDE[i], 1 - t), mul(SIDE[i + 1], t))), res: i, t, gap, cyl: inCyl });
     }
   }
   const lastP = cyl && SS[N - 1] === "H" ? AX[N - 1] : CA[N - 1];
-  pts.push({ p: lastP, r: radOf(SS[N - 1]), ss: SS[N - 1], pk: PB[N - 1], side: SIDE[N - 1], res: N - 1, t: 0, gap: false, cyl: cyl && SS[N - 1] === "H" });
+  pts.push({ p: lastP, r: radOf(SS[N - 1]), ss: SS[N - 1], pk: PB[N - 1], side: SIDE[N - 1], res: N - 1, t: 0, gap: false, cyl: cyl && SS[N - 1] === "H",
+             tp: !cyl && SS[N - 1] === "H" ? AX[N - 1] : lastP, tr: tRad(SS[N - 1]) });
 
   for (let k = 0; k < pts.length; k++) {
     const q = pts[k];
